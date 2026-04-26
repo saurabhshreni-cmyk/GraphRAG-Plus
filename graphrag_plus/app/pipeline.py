@@ -413,7 +413,11 @@ class GraphRAGPipeline:
                 "question": request.question,
                 "graph_version_id": graph_version_id,
                 "used_llm": used_llm,
-                "failure_type": str(response.failure_type) if response.failure_type else None,
+                "failure_type": (
+                    response.failure_type.value
+                    if response.failure_type is not None
+                    else None
+                ),
             },
         )
         return response
