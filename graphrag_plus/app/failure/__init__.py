@@ -1,0 +1,2 @@
+"""Failure handling package."""
+

@@ -1,0 +1,2 @@
+"""GraphRAG++ application package."""
+
