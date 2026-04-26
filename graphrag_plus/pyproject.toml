@@ -5,8 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "graphrag-plus"
 version = "0.1.0"
-description = "GraphRAG++: Temporal heterogeneous Graph RAG with trust, calibration, drift, and ablation."
+description = "GraphRAG++: graph-aware RAG backend with hybrid retrieval, trust modeling, calibration, contradiction handling, and graph versioning."
+authors = [{ name = "Saurabh Dwadash Shreni" }]
 requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "fastapi>=0.111.0",
   "uvicorn>=0.30.0",
