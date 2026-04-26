@@ -1,2 +1,1 @@
 """GNN package."""
-

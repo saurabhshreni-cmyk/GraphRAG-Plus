@@ -13,4 +13,3 @@ def test_trust_update_and_persist(tmp_path: Path) -> None:
     updated = manager.get_trust_score("doc_a")
     assert updated >= initial
     assert path.exists()
-

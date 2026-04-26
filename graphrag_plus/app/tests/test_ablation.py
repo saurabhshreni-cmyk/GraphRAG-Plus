@@ -13,4 +13,3 @@ def test_ablation_output_schema(tmp_path: Path) -> None:
     assert "rows" in result
     assert "report_path" in result
     assert len(result["rows"]) >= 1
-

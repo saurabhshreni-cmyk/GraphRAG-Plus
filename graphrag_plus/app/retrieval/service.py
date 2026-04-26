@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -33,12 +32,12 @@ class RetrievalService:
 
     def __init__(self, graph_store: GraphStore):
         self.graph_store = graph_store
-        self.chunks: List[Chunk] = []
+        self.chunks: list[Chunk] = []
         self.vectorizer = TfidfVectorizer()
         self.chunk_matrix = None
         self.bm25: BM25Okapi | None = None
 
-    def build_indexes(self, chunks: List[Chunk]) -> None:
+    def build_indexes(self, chunks: list[Chunk]) -> None:
         """Build in-memory indexes."""
         self.chunks = chunks
         texts = [chunk.text for chunk in chunks]
@@ -50,7 +49,7 @@ class RetrievalService:
         tokenized = [text.lower().split() for text in texts]
         self.bm25 = BM25Okapi(tokenized)
 
-    def query(self, question: str, top_k: int, trust_lookup: Dict[str, float]) -> List[Dict[str, float]]:
+    def query(self, question: str, top_k: int, trust_lookup: dict[str, float]) -> list[dict[str, float]]:
         """Retrieve candidates with base scores."""
         if not self.chunks or self.chunk_matrix is None or self.bm25 is None:
             return []
@@ -60,7 +59,7 @@ class RetrievalService:
         bm25_scores = np.array(self.bm25.get_scores(question.lower().split()))
         graph_hits = self._graph_hit_scores(question)
 
-        rows: List[Dict[str, float]] = []
+        rows: list[dict[str, float]] = []
         for idx, chunk in enumerate(self.chunks):
             source_id = chunk.doc_id
             semantic = float(cosine[idx])
@@ -84,9 +83,9 @@ class RetrievalService:
         rows.sort(key=lambda item: item["semantic_score"], reverse=True)
         return rows[: max(top_k * 3, 10)]
 
-    def _graph_hit_scores(self, question: str) -> Dict[str, float]:
+    def _graph_hit_scores(self, question: str) -> dict[str, float]:
         keywords = {token.lower() for token in question.split() if len(token) > 2}
-        scores: Dict[str, float] = {}
+        scores: dict[str, float] = {}
         for node_id, attrs in self.graph_store.graph.nodes(data=True):
             label = str(attrs.get("label", "")).lower()
             if not label:
@@ -98,4 +97,3 @@ class RetrievalService:
                 if pred.startswith("doc_") or "_ch_" in pred:
                     scores[pred] = scores.get(pred, 0.0) + float(overlap)
         return scores
-

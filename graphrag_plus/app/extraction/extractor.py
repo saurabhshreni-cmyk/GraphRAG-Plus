@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
 
 from graphrag_plus.app.extraction.models import Entity, Relation
 from graphrag_plus.app.ingestion.models import Chunk
-
 
 ENTITY_PATTERN = re.compile(r"\b([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,})*)\b")
 REL_PATTERN = re.compile(
@@ -17,10 +15,10 @@ REL_PATTERN = re.compile(
 DATE_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 
-def extract_from_chunks(chunks: List[Chunk]) -> Tuple[List[Entity], List[Relation]]:
+def extract_from_chunks(chunks: list[Chunk]) -> tuple[list[Entity], list[Relation]]:
     """Extract entities and relations from chunks."""
-    entities: List[Entity] = []
-    relations: List[Relation] = []
+    entities: list[Entity] = []
+    relations: list[Relation] = []
     for chunk in chunks:
         chunk_dates = DATE_PATTERN.findall(chunk.text)
         for match in ENTITY_PATTERN.finditer(chunk.text):
@@ -61,4 +59,3 @@ def extract_from_chunks(chunks: List[Chunk]) -> Tuple[List[Entity], List[Relatio
 def should_trigger_fallback(confidence: float, threshold: float) -> bool:
     """Adaptive fallback gate for potential LLM enrichment."""
     return confidence < threshold
-

@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 from graphrag_plus.app.api.main import app
 
-
 client = TestClient(app)
 
 

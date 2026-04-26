@@ -1,2 +1,1 @@
 """Active learning package."""
-

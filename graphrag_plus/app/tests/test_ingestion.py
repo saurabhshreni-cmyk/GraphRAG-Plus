@@ -13,4 +13,3 @@ def test_text_ingestion_and_chunking(tmp_path: Path) -> None:
     chunks = chunk_documents(docs, chunk_size=15, chunk_overlap=3)
     assert len(docs) == 1
     assert len(chunks) >= 2
-

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
 
-
-def precision_at_k(retrieved: List[str], relevant: List[str], k: int) -> float:
+def precision_at_k(retrieved: list[str], relevant: list[str], k: int) -> float:
     """Compute precision@k."""
     top = retrieved[:k]
     if not top:
@@ -14,7 +12,7 @@ def precision_at_k(retrieved: List[str], relevant: List[str], k: int) -> float:
     return hits / len(top)
 
 
-def recall_at_k(retrieved: List[str], relevant: List[str], k: int) -> float:
+def recall_at_k(retrieved: list[str], relevant: list[str], k: int) -> float:
     """Compute recall@k."""
     if not relevant:
         return 0.0
@@ -29,10 +27,9 @@ def hallucination_rate(answered: int, unsupported: int) -> float:
     return unsupported / answered
 
 
-def aggregate_metrics(rows: List[Dict[str, float]]) -> Dict[str, float]:
+def aggregate_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
     """Average metric rows."""
     if not rows:
         return {}
     keys = sorted(rows[0].keys())
     return {key: sum(float(row.get(key, 0.0)) for row in rows) / len(rows) for key in keys}
-

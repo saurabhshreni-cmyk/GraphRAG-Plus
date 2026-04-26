@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 
 @dataclass
@@ -13,7 +12,7 @@ class Document:
     doc_id: str
     source: str
     text: str
-    metadata: Dict[str, str]
+    metadata: dict[str, str]
 
 
 @dataclass
@@ -25,5 +24,4 @@ class Chunk:
     text: str
     start: int
     end: int
-    timestamp: Optional[str]
-
+    timestamp: str | None

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 from graphrag_plus.app.schemas.models import FailureType
 
 
@@ -20,7 +18,7 @@ class FailureModeHandler:
         llm_failed: bool,
         confidence_threshold: float,
         high_uncertainty_threshold: float,
-    ) -> Dict[str, Optional[str]]:
+    ) -> dict[str, str | None]:
         """Return failure classification and mitigation strategy."""
         if llm_failed:
             return {
@@ -53,4 +51,3 @@ class FailureModeHandler:
                 "mitigation": "partial_answer_with_warning",
             }
         return {"failure_type": None, "explanation": None, "mitigation": None}
-

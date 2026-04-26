@@ -7,14 +7,12 @@ pipeline degrades gracefully on lightweight installs.
 
 from __future__ import annotations
 
-from typing import Dict, List
-
 try:  # Optional dependency
     import torch
     from torch import nn
 
     _TORCH_AVAILABLE = True
-except Exception:  # noqa: BLE001 - torch import can fail in many ways
+except Exception:
     torch = None  # type: ignore[assignment]
     nn = None  # type: ignore[assignment]
     _TORCH_AVAILABLE = False
@@ -23,7 +21,7 @@ except Exception:  # noqa: BLE001 - torch import can fail in many ways
 _FEATURE_KEYS = ("semantic_score", "graph_score", "confidence_score", "trust_score")
 
 
-def _features(candidate: Dict[str, float]) -> List[float]:
+def _features(candidate: dict[str, float]) -> list[float]:
     return [float(candidate.get(key, 0.0)) for key in _FEATURE_KEYS]
 
 
@@ -41,7 +39,7 @@ if _TORCH_AVAILABLE:
                 nn.Sigmoid(),
             )
 
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":  # type: ignore[name-defined]
+        def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
             return self.net(x)
 
 
@@ -50,7 +48,7 @@ class GNNScorer:
 
     def __init__(self) -> None:
         if _TORCH_AVAILABLE:
-            self.model: "TinyGraphScorer | None" = TinyGraphScorer()
+            self.model: TinyGraphScorer | None = TinyGraphScorer()
             self.model.eval()
         else:
             self.model = None
@@ -59,16 +57,16 @@ class GNNScorer:
     def torch_available(self) -> bool:
         return _TORCH_AVAILABLE
 
-    def _fallback_score(self, candidates: List[Dict[str, float]]) -> List[float]:
+    def _fallback_score(self, candidates: list[dict[str, float]]) -> list[float]:
         # Deterministic blend in [0, 1] when torch is unavailable.
-        out: List[float] = []
+        out: list[float] = []
         for candidate in candidates:
             sem, graph, conf, trust = _features(candidate)
             score = 0.35 * sem + 0.25 * graph + 0.2 * conf + 0.2 * trust
             out.append(max(0.0, min(1.0, score)))
         return out
 
-    def score(self, candidates: List[Dict[str, float]]) -> List[float]:
+    def score(self, candidates: list[dict[str, float]]) -> list[float]:
         """Infer graph-aware scores. Returns [] for empty input."""
         if not candidates:
             return []

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Set, Tuple, TypeVar
+from collections.abc import Callable
+from typing import Any
 
 from graphrag_plus.app.active_learning.manager import ActiveLearningManager
 from graphrag_plus.app.analyst.engine import AnalystEngine
@@ -24,6 +25,7 @@ from graphrag_plus.app.retrieval.service import RetrievalService
 from graphrag_plus.app.schemas.models import (
     ContradictionItem,
     EvidenceItem,
+    FailureType,
     IngestResponse,
     QueryRequest,
     QueryResponse,
@@ -35,8 +37,6 @@ from graphrag_plus.app.utils.metrics import METRICS
 from graphrag_plus.app.utils.run_logger import utc_now_iso, write_query_output, write_run_log
 from graphrag_plus.app.utils.runtime import apply_global_seed
 
-T = TypeVar("T")
-
 
 class GraphRAGPipeline:
     """End-to-end pipeline service."""
@@ -46,9 +46,7 @@ class GraphRAGPipeline:
         self.logger = get_logger(self.__class__.__name__)
         apply_global_seed(settings.random_seed)
         self.graph_store = GraphStore(settings.graph_path)
-        self.version_manager = GraphVersionManager(
-            settings.graph_versions_dir, settings.answers_log_path
-        )
+        self.version_manager = GraphVersionManager(settings.graph_versions_dir, settings.answers_log_path)
         self.retrieval = RetrievalService(self.graph_store)
         self.trust_manager = SourceTrustManager(
             settings.trust_state_path,
@@ -71,19 +69,24 @@ class GraphRAGPipeline:
         self.analyst = AnalystEngine()
         self.generator = AnswerGenerator(settings.llm_enabled)
         self.gnn = GNNScorer()
-        self.latest_changed_nodes: List[str] = []
+        self.latest_changed_nodes: list[str] = []
         self.latest_graph_version: str | None = None
         # Persisted contradiction signal: chunk_ids that participated in a
         # contradiction during ingestion. Used by the query path to surface
         # actually-conflicting evidence rather than substring guesses.
-        self._chunk_contradictions: Dict[str, List[ContradictionItem]] = {}
+        self._chunk_contradictions: dict[str, list[ContradictionItem]] = {}
 
     # ------------------------------------------------------------------ utils
-    def _safe(self, stage: str, fn: Callable[[], T], fallback: T) -> T:
-        """Run ``fn`` and return ``fallback`` if it raises, with structured logging."""
+    def _safe(self, stage: str, fn: Callable[[], Any], fallback: Any) -> Any:
+        """Run ``fn`` and return ``fallback`` if it raises, with structured logging.
+
+        Typed loosely as ``Any`` because callers pass empty containers as fallbacks
+        whose types mypy infers as ``list[Never]`` / ``tuple[list[Never], ...]``.
+        Concrete types are recovered at the call site.
+        """
         try:
             return fn()
-        except Exception as exc:  # noqa: BLE001 - we deliberately catch all
+        except Exception as exc:
             self.logger.exception("stage_failed=%s", stage)
             log_event(self.logger, "stage_failed", {"stage": stage, "error": str(exc)})
             METRICS.errors_total.labels(stage=stage).inc()
@@ -94,10 +97,10 @@ class GraphRAGPipeline:
         return round((time.perf_counter() - start) * 1000, 3)
 
     # --------------------------------------------------------------- ingestion
-    def ingest(self, file_paths: List[str], urls: List[str]) -> IngestResponse:
+    def ingest(self, file_paths: list[str], urls: list[str]) -> IngestResponse:
         """Ingest and index documents."""
         ingestion_start = time.perf_counter()
-        timings: Dict[str, float] = {}
+        timings: dict[str, float] = {}
 
         load_start = time.perf_counter()
         documents = self._safe(
@@ -110,9 +113,7 @@ class GraphRAGPipeline:
         chunk_start = time.perf_counter()
         chunks = self._safe(
             "ingestion.chunk_documents",
-            lambda: chunk_documents(
-                documents, self.settings.chunk_size, self.settings.chunk_overlap
-            ),
+            lambda: chunk_documents(documents, self.settings.chunk_size, self.settings.chunk_overlap),
             [],
         )
         timings["chunk_ms"] = self._ms_since(chunk_start)
@@ -125,7 +126,7 @@ class GraphRAGPipeline:
         )
         timings["extract_ms"] = self._ms_since(extract_start)
 
-        contradictions: List[ContradictionItem] = []
+        contradictions: list[ContradictionItem] = []
         if self.settings.enable_contradiction:
             contradiction_start = time.perf_counter()
             relations, contradictions = self._safe(
@@ -138,9 +139,7 @@ class GraphRAGPipeline:
         graph_start = time.perf_counter()
         changed_nodes, changed_edges = self._safe(
             "graph.upsert",
-            lambda: self.graph_store.upsert_from_extractions(
-                documents, chunks, entities, relations
-            ),
+            lambda: self.graph_store.upsert_from_extractions(documents, chunks, entities, relations),
             ([], []),
         )
         timings["graph_upsert_ms"] = self._ms_since(graph_start)
@@ -167,9 +166,7 @@ class GraphRAGPipeline:
         timings["total_ms"] = self._ms_since(ingestion_start)
         METRICS.ingest_total.inc()
         METRICS.ingest_documents.inc(len(documents))
-        METRICS.observe_modules(
-            (name, ms) for name, ms in timings.items() if name != "total_ms"
-        )
+        METRICS.observe_modules((name, ms) for name, ms in timings.items() if name != "total_ms")
         log_event(
             self.logger,
             "ingest_complete",
@@ -192,7 +189,7 @@ class GraphRAGPipeline:
             graph_version_id=str(version_info.get("graph_version_id", "error")),
         )
 
-    def _record_contradictions(self, contradictions: List[ContradictionItem]) -> None:
+    def _record_contradictions(self, contradictions: list[ContradictionItem]) -> None:
         """Persist contradictions for query-time consumption + update trust."""
         for item in contradictions:
             for chunk_id in (item.source_a, item.source_b):
@@ -201,20 +198,15 @@ class GraphRAGPipeline:
             # Bind locals explicitly so each safe call captures the right value.
             source_a = item.source_a
             source_b = item.source_b
-            self._safe(
-                "trust.update_a",
-                lambda sa=source_a: self.trust_manager.update(
-                    sa, agrees=False, is_correct=False, low_confidence=True
-                ),
-                None,
-            )
-            self._safe(
-                "trust.update_b",
-                lambda sb=source_b: self.trust_manager.update(
-                    sb, agrees=False, is_correct=False, low_confidence=True
-                ),
-                None,
-            )
+
+            def _update_a(sa: str = source_a) -> None:
+                self.trust_manager.update(sa, agrees=False, is_correct=False, low_confidence=True)
+
+            def _update_b(sb: str = source_b) -> None:
+                self.trust_manager.update(sb, agrees=False, is_correct=False, low_confidence=True)
+
+            self._safe("trust.update_a", _update_a, None)
+            self._safe("trust.update_b", _update_b, None)
 
     # ------------------------------------------------------------------ query
     def query(self, request: QueryRequest) -> QueryResponse:
@@ -222,7 +214,7 @@ class GraphRAGPipeline:
         query_id = f"qry_{uuid.uuid4().hex[:12]}"
         started_at = utc_now_iso()
         query_start = time.perf_counter()
-        module_timings: Dict[str, float] = {
+        module_timings: dict[str, float] = {
             "planning_ms": 0.0,
             "retrieval_ms": 0.0,
             "scoring_ms": 0.0,
@@ -248,20 +240,14 @@ class GraphRAGPipeline:
             gnn_scores = self._safe("gnn.score", lambda: self.gnn.score(candidates), [])
             if gnn_scores and len(gnn_scores) == len(candidates):
                 for idx, gnn_score in enumerate(gnn_scores):
-                    candidates[idx]["graph_score"] = (
-                        0.5 * candidates[idx]["graph_score"] + 0.5 * gnn_score
-                    )
+                    candidates[idx]["graph_score"] = 0.5 * candidates[idx]["graph_score"] + 0.5 * gnn_score
 
         scoring_start = time.perf_counter()
-        scored = self._safe(
-            "scoring.score_candidates", lambda: self.scoring.score_candidates(candidates), []
-        )
+        scored = self._safe("scoring.score_candidates", lambda: self.scoring.score_candidates(candidates), [])
         module_timings["scoring_ms"] = self._ms_since(scoring_start)
 
         top = scored[: request.top_k] if scored else []
-        raw_confidence = (
-            float(sum(item["confidence_score"] for item in top) / len(top)) if top else 0.0
-        )
+        raw_confidence = float(sum(item["confidence_score"] for item in top) / len(top)) if top else 0.0
 
         calibrated_confidence, calibration_error = self._calibrate(raw_confidence)
 
@@ -323,21 +309,17 @@ class GraphRAGPipeline:
         graph_version_id = self.latest_graph_version or "unknown"
         self._safe(
             "versioning.record_answer",
-            lambda: self.version_manager.record_answer(
-                answer_id, graph_version_id, supporting_nodes
-            ),
+            lambda: self.version_manager.record_answer(answer_id, graph_version_id, supporting_nodes),
             None,
         )
         answer_state = self._safe(
             "versioning.detect_answer_state",
-            lambda: self.version_manager.detect_answer_state(
-                supporting_nodes, self.latest_changed_nodes
-            ),
+            lambda: self.version_manager.detect_answer_state(supporting_nodes, self.latest_changed_nodes),
             "updated",
         )
 
-        reasoning_steps: List[str] = []
-        follow_ups: List[str] = []
+        reasoning_steps: list[str] = []
+        follow_ups: list[str] = []
         if request.analyst_mode or self.settings.analyst_mode_default:
             analyst_conflicts = [item.model_dump() for item in conflicting]
             analyst = self._safe(
@@ -382,7 +364,7 @@ class GraphRAGPipeline:
             explanation=failure["explanation"] or "Answer generated from top ranked evidence.",
             conflicting_evidence=conflicting,
             resolution_explanation=resolution_explanation,
-            failure_type=failure["failure_type"],
+            failure_type=FailureType(failure["failure_type"]) if failure["failure_type"] else None,
             mitigation_strategy_used=failure["mitigation"],
             reasoning_steps=reasoning_steps,
             follow_up_questions=follow_ups,
@@ -413,27 +395,23 @@ class GraphRAGPipeline:
                 "question": request.question,
                 "graph_version_id": graph_version_id,
                 "used_llm": used_llm,
-                "failure_type": (
-                    response.failure_type.value
-                    if response.failure_type is not None
-                    else None
-                ),
+                "failure_type": (response.failure_type.value if response.failure_type is not None else None),
             },
         )
         return response
 
     # ----------------------------------------------------------- query helpers
-    def _build_trust_lookup(self) -> Dict[str, float]:
-        lookup: Dict[str, float] = {}
+    def _build_trust_lookup(self) -> dict[str, float]:
+        lookup: dict[str, float] = {}
         try:
             for node_id, attrs in self.graph_store.graph.nodes(data=True):
                 if attrs.get("node_type") == "Document":
                     lookup[node_id] = self.trust_manager.get_trust_score(node_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log_event(self.logger, "trust_lookup_failed", {"error": str(exc)})
         return lookup
 
-    def _calibrate(self, raw_confidence: float) -> Tuple[float, float]:
+    def _calibrate(self, raw_confidence: float) -> tuple[float, float]:
         if not (self.settings.enable_calibration and self.settings.use_calibration):
             return raw_confidence, 0.0
         cal = self._safe(
@@ -446,7 +424,7 @@ class GraphRAGPipeline:
         return cal.calibrated_confidence, cal.calibration_error
 
     @staticmethod
-    def _evidence_from(item: Dict[str, Any]) -> EvidenceItem:
+    def _evidence_from(item: dict[str, Any]) -> EvidenceItem:
         return EvidenceItem(
             id=item["id"],
             source_id=item["source_id"],
@@ -460,15 +438,15 @@ class GraphRAGPipeline:
         )
 
     def _collect_conflicts(
-        self, evidence_items: List[EvidenceItem], question: str
-    ) -> Tuple[List[ContradictionItem], str | None, bool]:
+        self, evidence_items: list[EvidenceItem], question: str
+    ) -> tuple[list[ContradictionItem], str | None, bool]:
         """Return contradictions whose chunk ids are present in current evidence."""
         if not evidence_items or not self._chunk_contradictions:
             return [], None, False
 
-        evidence_ids: Set[str] = {e.id for e in evidence_items}
-        seen: Set[Tuple[str, str, str]] = set()
-        conflicting: List[ContradictionItem] = []
+        evidence_ids: set[str] = {e.id for e in evidence_items}
+        seen: set[tuple[str, str, str]] = set()
+        conflicting: list[ContradictionItem] = []
 
         for evidence in evidence_items:
             for item in self._chunk_contradictions.get(evidence.id, []):
@@ -484,8 +462,7 @@ class GraphRAGPipeline:
             return [], None, False
 
         resolution = (
-            "Source ranking favored higher trust and confidence evidence "
-            "during contradiction resolution."
+            "Source ranking favored higher trust and confidence evidence " "during contradiction resolution."
         )
         # Provide question for downstream analyst context but keep ContradictionItem schema stable.
         _ = question

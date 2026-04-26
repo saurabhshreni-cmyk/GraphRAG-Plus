@@ -15,4 +15,3 @@ def test_version_creation_and_stale_detection(tmp_path: Path) -> None:
     assert version["graph_version_id"]
     assert manager.detect_answer_state(["n1"], ["n1"]) == "stale"
     assert manager.detect_answer_state(["n2"], ["n1"]) == "updated"
-

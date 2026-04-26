@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 
@@ -27,7 +26,7 @@ class CalibrationModule:
         self.state_path = state_path
         state = load_json(state_path, default={})
         self.temperature: float = float(state.get("temperature", 1.0))
-        self.bin_stats: Dict[str, Dict[str, float]] = state.get("bin_stats", {})
+        self.bin_stats: dict[str, dict[str, float]] = state.get("bin_stats", {})
 
     def _sigmoid(self, x: float) -> float:
         return 1.0 / (1.0 + np.exp(-x))
@@ -38,9 +37,11 @@ class CalibrationModule:
         logit = np.log(raw / (1 - raw))
         calibrated = float(self._sigmoid(logit / max(self.temperature, 1e-6)))
         ece = self.expected_calibration_error()
-        return CalibrationOutput(raw_confidence=raw_confidence, calibrated_confidence=calibrated, calibration_error=ece)
+        return CalibrationOutput(
+            raw_confidence=raw_confidence, calibrated_confidence=calibrated, calibration_error=ece
+        )
 
-    def fit_temperature(self, logits: List[float], labels: List[int]) -> float:
+    def fit_temperature(self, logits: list[float], labels: list[int]) -> float:
         """Fit scalar temperature via grid search."""
         if not logits or len(logits) != len(labels):
             return self.temperature
@@ -59,12 +60,12 @@ class CalibrationModule:
         self.persist()
         return self.temperature
 
-    def update_reliability(self, confidences: List[float], labels: List[int], bins: int = 10) -> None:
+    def update_reliability(self, confidences: list[float], labels: list[int], bins: int = 10) -> None:
         """Update reliability stats for ECE."""
         if not confidences or len(confidences) != len(labels):
             return
         hist = {str(i): {"count": 0, "conf_sum": 0.0, "acc_sum": 0.0} for i in range(bins)}
-        for confidence, label in zip(confidences, labels):
+        for confidence, label in zip(confidences, labels, strict=True):
             idx = min(bins - 1, int(confidence * bins))
             key = str(idx)
             hist[key]["count"] += 1
@@ -97,4 +98,3 @@ class CalibrationModule:
                 "bin_stats": self.bin_stats,
             },
         )
-

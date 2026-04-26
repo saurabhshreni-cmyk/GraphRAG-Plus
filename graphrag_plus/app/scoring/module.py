@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any
 
 from graphrag_plus.app.utils.logging_utils import get_logger, log_event
 from graphrag_plus.app.utils.math_utils import min_max_normalize
@@ -11,11 +11,11 @@ from graphrag_plus.app.utils.math_utils import min_max_normalize
 class ScoringModule:
     """Combine retrieval signals into one score."""
 
-    def __init__(self, weights: Dict[str, float]):
+    def __init__(self, weights: dict[str, float]):
         self.logger = get_logger(self.__class__.__name__)
         self.weights = weights
 
-    def score_candidates(self, candidates: List[Dict[str, float]]) -> List[Dict[str, float]]:
+    def score_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Normalize and score candidate rows."""
         if not candidates:
             return []
@@ -25,7 +25,7 @@ class ScoringModule:
         trust = min_max_normalize(c["trust_score"] for c in candidates)
         uncertainty = min_max_normalize(c["uncertainty_penalty"] for c in candidates)
 
-        scored: List[Dict[str, float]] = []
+        scored: list[dict[str, Any]] = []
         for idx, candidate in enumerate(candidates):
             final_score = (
                 self.weights["w1"] * semantic[idx]
@@ -61,4 +61,3 @@ class ScoringModule:
             )
         scored.sort(key=lambda item: item["final_score"], reverse=True)
         return scored
-

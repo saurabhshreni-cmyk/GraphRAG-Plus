@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import re
-from typing import List
 
 from graphrag_plus.app.ingestion.models import Chunk, Document
-
 
 TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 
-def chunk_documents(documents: List[Document], chunk_size: int, chunk_overlap: int) -> List[Chunk]:
+def chunk_documents(documents: list[Document], chunk_size: int, chunk_overlap: int) -> list[Chunk]:
     """Split documents with overlap and timestamp hints."""
-    chunks: List[Chunk] = []
+    chunks: list[Chunk] = []
     for doc in documents:
         text = doc.text
         if not text:
@@ -40,4 +38,3 @@ def chunk_documents(documents: List[Document], chunk_size: int, chunk_overlap: i
             start = max(0, end - chunk_overlap)
             idx += 1
     return chunks
-

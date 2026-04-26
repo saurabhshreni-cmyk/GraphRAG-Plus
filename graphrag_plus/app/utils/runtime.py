@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import random
-from typing import Dict, List
 
 import numpy as np
 
@@ -11,7 +10,7 @@ try:  # Optional dependency
     import torch  # type: ignore[import-not-found]
 
     _TORCH_AVAILABLE = True
-except Exception:  # noqa: BLE001
+except Exception:
     torch = None  # type: ignore[assignment]
     _TORCH_AVAILABLE = False
 
@@ -28,9 +27,9 @@ def apply_global_seed(seed: int) -> None:
             torch.cuda.manual_seed_all(seed)
 
 
-def enabled_modules(settings: Settings) -> List[str]:
+def enabled_modules(settings: Settings) -> list[str]:
     """Return human-readable enabled module names."""
-    modules: List[str] = []
+    modules: list[str] = []
     if settings.use_graph:
         modules.append("graph")
     if settings.use_vector:
@@ -48,7 +47,7 @@ def enabled_modules(settings: Settings) -> List[str]:
     return modules
 
 
-def backend_status(settings: Settings) -> Dict[str, str]:
+def backend_status(settings: Settings) -> dict[str, str]:
     """Return simple backend status info for CLI display."""
     return {
         "graph": "networkx-json",
@@ -56,4 +55,3 @@ def backend_status(settings: Settings) -> Dict[str, str]:
         "llm": "enabled" if settings.llm_enabled else "disabled",
         "cache_dir": str(settings.cache_dir),
     }
-

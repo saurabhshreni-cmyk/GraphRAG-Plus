@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,7 +45,7 @@ class Settings(BaseSettings):
     use_trust: bool = True
 
     default_trust_prior: float = 0.5
-    source_trust_priors: Dict[str, float] = Field(default_factory=dict)
+    source_trust_priors: dict[str, float] = Field(default_factory=dict)
 
     scoring_w1_semantic: float = 0.22
     scoring_w2_graph: float = 0.2

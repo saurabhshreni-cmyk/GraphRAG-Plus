@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 from graphrag_plus.app.utils.io_utils import append_jsonl, dump_json, load_json
 from graphrag_plus.app.utils.logging_utils import get_logger, log_event
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class GraphVersionManager:
@@ -25,7 +24,9 @@ class GraphVersionManager:
         self.index_path = self.versions_dir / "index.json"
         self.index = load_json(self.index_path, default={"versions": []})
 
-    def create_version(self, snapshot: Dict[str, List[Dict[str, str]]], changed_nodes: List[str], changed_edges: List[str]) -> Dict[str, object]:
+    def create_version(
+        self, snapshot: dict[str, list[dict[str, str]]], changed_nodes: list[str], changed_edges: list[str]
+    ) -> dict[str, object]:
         """Persist snapshot and delta."""
         version_id = _utcnow().strftime("v%Y%m%d%H%M%S%f")
         version_path = self.versions_dir / f"{version_id}.json"
@@ -44,11 +45,19 @@ class GraphVersionManager:
         log_event(
             self.logger,
             "graph_version_created",
-            {"graph_version_id": version_id, "changed_nodes": len(changed_nodes), "changed_edges": len(changed_edges)},
+            {
+                "graph_version_id": version_id,
+                "changed_nodes": len(changed_nodes),
+                "changed_edges": len(changed_edges),
+            },
         )
-        return {"graph_version_id": version_id, "changed_nodes": changed_nodes, "changed_edges": changed_edges}
+        return {
+            "graph_version_id": version_id,
+            "changed_nodes": changed_nodes,
+            "changed_edges": changed_edges,
+        }
 
-    def record_answer(self, answer_id: str, graph_version_id: str, supporting_nodes: List[str]) -> None:
+    def record_answer(self, answer_id: str, graph_version_id: str, supporting_nodes: list[str]) -> None:
         """Track answer lineage for drift checks."""
         append_jsonl(
             self.answers_log_path,
@@ -62,7 +71,7 @@ class GraphVersionManager:
             ],
         )
 
-    def detect_answer_state(self, supporting_nodes: List[str], changed_nodes: List[str]) -> str:
+    def detect_answer_state(self, supporting_nodes: list[str], changed_nodes: list[str]) -> str:
         """Mark answer stale or updated."""
         overlap = set(supporting_nodes).intersection(changed_nodes)
         if overlap:

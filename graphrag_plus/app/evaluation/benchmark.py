@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
 
 from graphrag_plus.app.utils.io_utils import dump_json, load_json
 
 
-def default_benchmark() -> List[Dict[str, object]]:
+def default_benchmark() -> list[dict[str, object]]:
     """Return baseline benchmark set."""
     return [
         {
@@ -42,10 +41,9 @@ def default_benchmark() -> List[Dict[str, object]]:
     ]
 
 
-def ensure_benchmark(path: Path) -> List[Dict[str, object]]:
+def ensure_benchmark(path: Path) -> list[dict[str, object]]:
     """Create benchmark on disk if missing."""
     if not path.exists():
         payload = default_benchmark()
         dump_json(path, payload)
     return load_json(path, default=default_benchmark())
-

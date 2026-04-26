@@ -27,4 +27,3 @@ def test_scoring_module_normalizes_and_sorts() -> None:
     assert len(scored) == 2
     assert scored[0]["id"] == "a"
     assert scored[0]["final_score"] > scored[1]["final_score"]
-

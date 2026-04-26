@@ -59,14 +59,13 @@ def _package_version() -> str:
 def _print_system_status() -> None:
     try:
         settings = get_settings()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"GraphRAG++ | version={_package_version()} | settings_error={exc}", file=sys.stderr)
         return
     print(f"GraphRAG++ | version={_package_version()}", file=sys.stderr)
     print(f"Enabled modules: {', '.join(enabled_modules(settings)) or 'none'}", file=sys.stderr)
     print(
-        "Backends: "
-        + ", ".join(f"{name}={value}" for name, value in backend_status(settings).items()),
+        "Backends: " + ", ".join(f"{name}={value}" for name, value in backend_status(settings).items()),
         file=sys.stderr,
     )
 
@@ -77,8 +76,8 @@ def _health_check() -> dict:
 
     # Import checks (report missing deps instead of crashing).
     try:
-        from graphrag_plus.app.config.settings import get_settings  # noqa: WPS433
-    except Exception as exc:  # noqa: BLE001
+        from graphrag_plus.app.config.settings import get_settings  # noqa: PLC0415
+    except Exception as exc:
         issues.append(f"settings_import_error: {exc}")
         status = "degraded"
         return {"status": status, "issues": issues}
@@ -86,19 +85,19 @@ def _health_check() -> dict:
     settings = None
     try:
         settings = get_settings()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"settings_validation_error: {exc}")
 
     try:
-        from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: WPS433
-    except Exception as exc:  # noqa: BLE001
+        from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: PLC0415
+    except Exception as exc:
         issues.append(f"pipeline_import_error: {exc}")
         status = "degraded"
         return {"status": status, "issues": issues}
 
     try:
         pipeline = GraphRAGPipeline(settings)  # type: ignore[arg-type]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"pipeline_init_error: {exc}")
         status = "degraded"
         return {"status": status, "issues": issues}
@@ -106,32 +105,32 @@ def _health_check() -> dict:
     # Graph backend
     try:
         _ = pipeline.graph_store.graph.number_of_nodes()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"graph_backend_error: {exc}")
 
     # Vector index readiness (degraded if no ingest yet)
     try:
         if pipeline.retrieval.chunk_matrix is None:
             issues.append("vector_index_not_built: run ingest first")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"vector_index_error: {exc}")
 
     # Scoring module
     try:
         _ = pipeline.scoring.weights
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"scoring_module_error: {exc}")
 
     # Calibration module
     try:
         _ = pipeline.calibration.temperature
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"calibration_module_error: {exc}")
 
     # Trust module
     try:
         _ = pipeline.trust_manager.get_trust_score("health_probe")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         issues.append(f"trust_module_error: {exc}")
 
     if issues:
@@ -152,16 +151,19 @@ def main() -> None:
         return
 
     # Lazy imports so `health_check` can run even when dependencies are missing.
-    from graphrag_plus.app.evaluation.runner import evaluate_stub, run_ablation_matrix  # noqa: WPS433
-    from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: WPS433
-    from graphrag_plus.app.schemas.models import QueryRequest  # noqa: WPS433
+    from graphrag_plus.app.evaluation.runner import (  # noqa: PLC0415
+        evaluate_stub,
+        run_ablation_matrix,
+    )
+    from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: PLC0415
+    from graphrag_plus.app.schemas.models import QueryRequest  # noqa: PLC0415
 
     settings = get_settings()
     pipeline = GraphRAGPipeline(settings)
 
     if args.command in {"ingest", "build-graph"}:
-        result = pipeline.ingest(args.files, args.urls)
-        print(result.model_dump_json(indent=2))
+        ingest_result = pipeline.ingest(args.files, args.urls)
+        print(ingest_result.model_dump_json(indent=2))
         return
     if args.command == "query":
         response = pipeline.query(
@@ -170,8 +172,8 @@ def main() -> None:
         print(response.model_dump_json(indent=2))
         return
     if args.command == "evaluate":
-        result = evaluate_stub(settings.reports_dir, settings.data_dir / "benchmark.json")
-        print(json.dumps(result, indent=2))
+        eval_result = evaluate_stub(settings.reports_dir, settings.data_dir / "benchmark.json")
+        print(json.dumps(eval_result, indent=2))
         return
     if args.command == "export-graph":
         target_path = Path(args.path)
@@ -180,8 +182,8 @@ def main() -> None:
         return
     if args.command == "run_ablation":
         evaluation = evaluate_stub(settings.reports_dir, settings.data_dir / "benchmark.json")
-        result = run_ablation_matrix(settings.reports_dir, evaluation["metrics"])
-        print(json.dumps(result, indent=2))
+        ablation_result = run_ablation_matrix(settings.reports_dir, evaluation["metrics"])
+        print(json.dumps(ablation_result, indent=2))
         return
 
 

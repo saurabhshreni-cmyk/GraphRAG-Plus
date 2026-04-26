@@ -11,4 +11,3 @@ def test_calibration_outputs_expected_fields(tmp_path: Path) -> None:
     output = module.calibrate(0.7)
     assert 0.0 <= output.calibrated_confidence <= 1.0
     assert output.calibration_error >= 0.0
-

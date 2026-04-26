@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict
 
 from graphrag_plus.app.utils.io_utils import dump_json, load_json
 from graphrag_plus.app.utils.logging_utils import get_logger, log_event
@@ -23,15 +22,13 @@ class SourceTrust:
 class SourceTrustManager:
     """Maintain and persist source trust."""
 
-    def __init__(self, state_path: Path, default_prior: float, priors: Dict[str, float]):
+    def __init__(self, state_path: Path, default_prior: float, priors: dict[str, float]):
         self.logger = get_logger(self.__class__.__name__)
         self.state_path = state_path
         self.default_prior = default_prior
         self.priors = priors
         raw_state = load_json(self.state_path, default={})
-        self._state: Dict[str, SourceTrust] = {
-            key: SourceTrust(**value) for key, value in raw_state.items()
-        }
+        self._state: dict[str, SourceTrust] = {key: SourceTrust(**value) for key, value in raw_state.items()}
 
     def _get_or_create(self, source_id: str) -> SourceTrust:
         if source_id not in self._state:
@@ -56,9 +53,7 @@ class SourceTrustManager:
             state.trust_score = max(0.0, state.trust_score - 0.05)
         if low_confidence:
             state.trust_score = max(0.0, state.trust_score - 0.02)
-        state.historical_accuracy = (
-            0.8 * state.historical_accuracy + 0.2 * (1.0 if is_correct else 0.0)
-        )
+        state.historical_accuracy = 0.8 * state.historical_accuracy + 0.2 * (1.0 if is_correct else 0.0)
         state.trust_score = min(1.0, max(0.0, 0.6 * state.trust_score + 0.4 * state.historical_accuracy))
         self.persist()
         log_event(
@@ -71,4 +66,3 @@ class SourceTrustManager:
         """Persist trust state."""
         payload = {key: asdict(value) for key, value in self._state.items()}
         dump_json(self.state_path, payload)
-

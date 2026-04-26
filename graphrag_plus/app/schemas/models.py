@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class FailureType(str, Enum):
+class FailureType(StrEnum):
     """Typed failure modes."""
 
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
@@ -22,8 +22,8 @@ class FailureType(str, Enum):
 class IngestRequest(BaseModel):
     """Ingestion request."""
 
-    file_paths: List[str] = Field(default_factory=list)
-    urls: List[str] = Field(default_factory=list)
+    file_paths: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
 
 
 class IngestResponse(BaseModel):
@@ -42,8 +42,8 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
     analyst_mode: bool = False
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
 
 class EvidenceItem(BaseModel):
@@ -72,38 +72,38 @@ class ContradictionItem(BaseModel):
 class QueryResponse(BaseModel):
     """Query response."""
 
-    query_id: Optional[str] = None
+    query_id: str | None = None
     answer: str
     confidence: float
     raw_confidence: float
     calibrated_confidence: float
     calibration_error: float
     used_llm: bool
-    evidence: List[EvidenceItem] = Field(default_factory=list)
-    evidence_paths: List[List[str]] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    evidence_paths: list[list[str]] = Field(default_factory=list)
     explanation: str
-    conflicting_evidence: List[ContradictionItem] = Field(default_factory=list)
-    resolution_explanation: Optional[str] = None
-    failure_type: Optional[FailureType] = None
-    mitigation_strategy_used: Optional[str] = None
-    reasoning_steps: List[str] = Field(default_factory=list)
-    follow_up_questions: List[str] = Field(default_factory=list)
-    graph_version_id: Optional[str] = None
+    conflicting_evidence: list[ContradictionItem] = Field(default_factory=list)
+    resolution_explanation: str | None = None
+    failure_type: FailureType | None = None
+    mitigation_strategy_used: str | None = None
+    reasoning_steps: list[str] = Field(default_factory=list)
+    follow_up_questions: list[str] = Field(default_factory=list)
+    graph_version_id: str | None = None
     answer_state: str = "updated"
-    output_path: Optional[str] = None
+    output_path: str | None = None
 
 
 class GraphResponse(BaseModel):
     """Graph API response."""
 
     node_id: str
-    neighbors: List[Dict[str, Any]]
+    neighbors: list[dict[str, Any]]
 
 
 class EvalResult(BaseModel):
     """Evaluation report payload."""
 
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
     report_path: str
 
 

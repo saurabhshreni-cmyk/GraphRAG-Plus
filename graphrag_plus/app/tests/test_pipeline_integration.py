@@ -28,9 +28,10 @@ def test_pipeline_ingest_query_roundtrip(tmp_path: Path) -> None:
     ingest_res = pipeline.ingest([str(doc)], [])
     assert ingest_res.documents == 1
 
-    query_res = pipeline.query(QueryRequest(question="What contradicts the cancellation claim?", analyst_mode=True))
+    query_res = pipeline.query(
+        QueryRequest(question="What contradicts the cancellation claim?", analyst_mode=True)
+    )
     assert query_res.answer
     assert query_res.raw_confidence >= 0.0
     assert query_res.calibrated_confidence >= 0.0
     assert query_res.failure_type is not None or query_res.evidence is not None
-

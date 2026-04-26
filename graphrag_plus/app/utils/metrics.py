@@ -6,7 +6,8 @@ and the ``/metrics`` endpoint returns a short plain-text status line.
 
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 try:
     from prometheus_client import (
@@ -18,18 +19,29 @@ try:
     )
 
     _PROM_AVAILABLE = True
-except Exception:  # noqa: BLE001
+except Exception:
     _PROM_AVAILABLE = False
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
 
 
 _LATENCY_BUCKETS = (
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
 )
 
 
 class _NoopMetric:
-    def labels(self, *_: object, **__: object) -> "_NoopMetric":
+    def labels(self, *_: object, **__: object) -> _NoopMetric:
         return self
 
     def inc(self, _: float = 1.0) -> None:
@@ -41,6 +53,14 @@ class _NoopMetric:
 
 class Metrics:
     """Single-instance metrics container."""
+
+    registry: Any
+    queries_total: Any
+    ingest_total: Any
+    ingest_documents: Any
+    query_latency: Any
+    module_latency: Any
+    errors_total: Any
 
     def __init__(self) -> None:
         if _PROM_AVAILABLE:
@@ -89,7 +109,7 @@ class Metrics:
             self.module_latency = _NoopMetric()
             self.errors_total = _NoopMetric()
 
-    def observe_modules(self, timings_ms: Iterable[Tuple[str, float]]) -> None:
+    def observe_modules(self, timings_ms: Iterable[tuple[str, float]]) -> None:
         for name, ms in timings_ms:
             self.module_latency.labels(module=name).observe(ms / 1000.0)
 

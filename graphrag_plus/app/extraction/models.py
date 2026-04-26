@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Optional
 
 
 @dataclass
@@ -16,7 +15,7 @@ class Entity:
     method: str
     source_chunk_id: str
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
@@ -31,8 +30,7 @@ class Relation:
     confidence: float
     method: str
     source_chunk_id: str
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
-

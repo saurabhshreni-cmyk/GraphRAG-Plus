@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import TypedDict
 
 from graphrag_plus.app.evaluation.benchmark import ensure_benchmark
 from graphrag_plus.app.evaluation.metrics import aggregate_metrics
 from graphrag_plus.app.utils.io_utils import dump_json
 
 
-def evaluate_stub(reports_dir: Path, benchmark_path: Path) -> Dict[str, object]:
+class EvaluationResult(TypedDict):
+    """Output payload for ``evaluate_stub``."""
+
+    metrics: dict[str, float]
+    report_path: str
+
+
+class AblationResult(TypedDict):
+    """Output payload for ``run_ablation_matrix``."""
+
+    rows: list[dict[str, object]]
+    report_path: str
+
+
+def evaluate_stub(reports_dir: Path, benchmark_path: Path) -> EvaluationResult:
     """Run lightweight synthetic evaluation."""
     benchmark = ensure_benchmark(benchmark_path)
-    rows: List[Dict[str, float]] = []
+    rows: list[dict[str, float]] = []
     for item in benchmark:
         difficulty = str(item.get("difficulty_level", ""))
         rows.append(
@@ -30,12 +44,12 @@ def evaluate_stub(reports_dir: Path, benchmark_path: Path) -> Dict[str, object]:
             }
         )
     metrics = aggregate_metrics(rows)
-    report_path = reports_dir / f"research_eval_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    report_path = reports_dir / f"research_eval_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.json"
     dump_json(report_path, {"metrics": metrics, "items": benchmark})
     return {"metrics": metrics, "report_path": str(report_path)}
 
 
-def run_ablation_matrix(reports_dir: Path, base_metrics: Dict[str, float]) -> Dict[str, object]:
+def run_ablation_matrix(reports_dir: Path, base_metrics: dict[str, float]) -> AblationResult:
     """Run ablation combinations on synthetic deltas."""
     configs = [
         {"use_gnn": True, "use_calibration": True, "use_graph": True, "use_vector": True, "use_trust": True},
@@ -48,12 +62,11 @@ def run_ablation_matrix(reports_dir: Path, base_metrics: Dict[str, float]) -> Di
     rows = []
     for config in configs:
         penalty = 0.0
-        for key, value in config.items():
+        for _key, value in config.items():
             if not value:
                 penalty += 0.03
         metrics = {key: max(0.0, float(value) - penalty) for key, value in base_metrics.items()}
         rows.append({"config": config, "metrics": metrics})
-    report_path = reports_dir / f"ablation_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    report_path = reports_dir / f"ablation_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.json"
     dump_json(report_path, rows)
     return {"rows": rows, "report_path": str(report_path)}
-

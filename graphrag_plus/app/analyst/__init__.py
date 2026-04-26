@@ -1,2 +1,1 @@
 """Analyst mode package."""
-

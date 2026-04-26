@@ -30,6 +30,6 @@ jobs:
       - name: Format check (black)
         run: black --check .
       - name: Type check (mypy)
-        run: mypy graphrag_plus/app || true
+        run: mypy app
       - name: Tests + coverage
-        run: pytest --cov=graphrag_plus/app --cov-report=term-missing
+        run: pytest --cov=app --cov-report=term-missing

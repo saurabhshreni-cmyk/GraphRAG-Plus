@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 
 class AnswerGenerator:
     """Deterministic generator with optional LLM fallback hook."""
@@ -14,10 +12,10 @@ class AnswerGenerator:
     def generate(
         self,
         question: str,
-        evidence: List[Dict[str, object]],
+        evidence: list[dict[str, object]],
         confidence: float,
         answer_threshold: float,
-    ) -> Tuple[str, bool, bool]:
+    ) -> tuple[str, bool, bool]:
         """Generate answer text. Returns answer, used_llm, llm_failed."""
         if not evidence:
             return "I cannot answer reliably because no evidence was found.", False, False
@@ -34,4 +32,3 @@ class AnswerGenerator:
         except Exception:
             fallback = " ".join(snippet[:160] for snippet in top_snippets).strip()
             return fallback or "LLM failed and fallback evidence was weak.", False, True
-

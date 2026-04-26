@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REQUIRED_IMPORTS = [
     "fastapi",
     "pydantic",
@@ -48,7 +47,7 @@ def check_imports(modules: list[str]) -> None:
     for module in modules:
         try:
             importlib.import_module(module)
-        except Exception as exc:  # noqa: BLE001 - fail fast with context
+        except Exception as exc:
             fail(f"Import failed: {module} ({exc})")
     ok(f"Imports succeeded ({len(modules)} modules)")
 
@@ -67,12 +66,19 @@ def check_cli_health() -> None:
     env.setdefault("TMP", str(tmp_dir))
 
     cmd = [sys.executable, "-m", "graphrag_plus.app.cli", "health_check"]
-    proc = subprocess.run(cmd, cwd=str(workspace_root), env=env, capture_output=True, text=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(workspace_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if proc.returncode != 0:
         fail(f"CLI health_check failed (exit {proc.returncode}): {proc.stderr.strip()}")
     try:
         payload = json.loads(proc.stdout)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         fail(f"CLI health_check did not return JSON ({exc}): {proc.stdout[:200]}")
     status = payload.get("status")
     if status not in {"healthy", "degraded"}:

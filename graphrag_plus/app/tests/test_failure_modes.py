@@ -15,4 +15,3 @@ def test_failure_mode_no_evidence() -> None:
         high_uncertainty_threshold=0.55,
     )
     assert payload["failure_type"] == "NO_EVIDENCE"
-

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
-
 
 class AnalystEngine:
     """Build analyst mode explanation artifacts."""
@@ -11,10 +9,10 @@ class AnalystEngine:
     def build(
         self,
         question: str,
-        evidence_paths: List[List[str]],
-        contradictions: List[Dict[str, str]],
+        evidence_paths: list[list[str]],
+        contradictions: list[dict[str, str]],
         confidence: float,
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """Generate analyst output fields."""
         reasoning_steps = [
             "Parsed question and decomposed into subqueries.",
@@ -37,4 +35,3 @@ class AnalystEngine:
             "evidence_paths": [" -> ".join(path) for path in evidence_paths],
             "contradictions": [item.get("explanation", "") for item in contradictions],
         }
-

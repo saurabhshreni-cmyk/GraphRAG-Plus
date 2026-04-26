@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -21,7 +21,6 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
-def log_event(logger: logging.Logger, event: str, payload: Dict[str, Any]) -> None:
+def log_event(logger: logging.Logger, event: str, payload: dict[str, Any]) -> None:
     """Log a structured event safely."""
     logger.info("%s %s", event, json.dumps(payload, default=str))
-

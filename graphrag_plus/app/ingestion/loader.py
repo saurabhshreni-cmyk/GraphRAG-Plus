@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import socket
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List
 from urllib.parse import urlparse
 
 import httpx
@@ -50,7 +50,7 @@ def _resolve_host(host: str) -> Iterable[str]:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
         return []
-    return {info[4][0] for info in infos}
+    return {str(info[4][0]) for info in infos}
 
 
 def validate_url(url: str) -> str:
@@ -113,7 +113,7 @@ def load_url(url: str, timeout: float = 10.0) -> Document:
             location = response.headers.get("location", "")
             if not location:
                 break
-            safe_url = validate_url(httpx.URL(safe_url).join(location).human_repr())
+            safe_url = validate_url(str(httpx.URL(safe_url).join(location)))
             response = client.get(safe_url)
             hops += 1
         response.raise_for_status()
@@ -130,9 +130,9 @@ def load_url(url: str, timeout: float = 10.0) -> Document:
     )
 
 
-def load_documents(file_paths: List[str], urls: List[str]) -> List[Document]:
+def load_documents(file_paths: list[str], urls: list[str]) -> list[Document]:
     """Load all docs and skip malformed inputs safely."""
-    docs: List[Document] = []
+    docs: list[Document] = []
     for file_path in file_paths:
         path = Path(file_path)
         if not path.exists() or not path.is_file():
@@ -143,7 +143,7 @@ def load_documents(file_paths: List[str], urls: List[str]) -> List[Document]:
                 docs.append(load_pdf_file(path))
             else:
                 docs.append(load_text_file(path))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("ingestion.file_load_failed path=%s error=%s", file_path, exc)
             continue
     for url in urls:
@@ -152,7 +152,7 @@ def load_documents(file_paths: List[str], urls: List[str]) -> List[Document]:
         except UnsafeURLError as exc:
             logger.warning("ingestion.url_blocked url=%s reason=%s", url, exc)
             continue
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("ingestion.url_load_failed url=%s error=%s", url, exc)
             continue
     return [doc for doc in docs if doc.text.strip()]
