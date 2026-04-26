@@ -1,6 +1,5 @@
 # GraphRAG++
 
-[![CI](https://github.com/saurabhshreni-cmyk/GraphRAG-Plus/actions/workflows/ci.yml/badge.svg)](https://github.com/saurabhshreni-cmyk/GraphRAG-Plus/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111%2B-009688.svg)](https://fastapi.tiangolo.com/)
