@@ -58,8 +58,35 @@ dev = [
   "mypy>=1.10.0",
 ]
 
-[tool.setuptools.packages.find]
-include = ["graphrag_plus*"]
+[tool.setuptools]
+# The repo root *is* the `graphrag_plus` package: pyproject.toml lives next to
+# `__init__.py` and `app/`. Map the import name onto "." and enumerate packages
+# explicitly so editable installs work without PYTHONPATH gymnastics.
+package-dir = {"graphrag_plus" = "."}
+packages = [
+  "graphrag_plus",
+  "graphrag_plus.app",
+  "graphrag_plus.app.active_learning",
+  "graphrag_plus.app.analyst",
+  "graphrag_plus.app.api",
+  "graphrag_plus.app.calibration",
+  "graphrag_plus.app.config",
+  "graphrag_plus.app.contradiction",
+  "graphrag_plus.app.evaluation",
+  "graphrag_plus.app.extraction",
+  "graphrag_plus.app.failure",
+  "graphrag_plus.app.generation",
+  "graphrag_plus.app.gnn",
+  "graphrag_plus.app.graph",
+  "graphrag_plus.app.graph.versioning",
+  "graphrag_plus.app.ingestion",
+  "graphrag_plus.app.planning",
+  "graphrag_plus.app.retrieval",
+  "graphrag_plus.app.schemas",
+  "graphrag_plus.app.scoring",
+  "graphrag_plus.app.trust",
+  "graphrag_plus.app.utils",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["graphrag_plus/app/tests"]
