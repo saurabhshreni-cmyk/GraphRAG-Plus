@@ -48,11 +48,14 @@ class Settings(BaseSettings):
     default_trust_prior: float = 0.5
     source_trust_priors: dict[str, float] = Field(default_factory=dict)
 
-    scoring_w1_semantic: float = 0.22
-    scoring_w2_graph: float = 0.2
-    scoring_w3_confidence: float = 0.2
-    scoring_w4_trust: float = 0.2
-    scoring_w5_uncertainty_penalty: float = 0.18
+    # Scoring weights — semantic dominates so on-topic chunks rank ahead of
+    # off-topic ones with similar trust/confidence priors. Graph score still
+    # matters but doesn't overwhelm a strong term match.
+    scoring_w1_semantic: float = 0.45
+    scoring_w2_graph: float = 0.15
+    scoring_w3_confidence: float = 0.15
+    scoring_w4_trust: float = 0.15
+    scoring_w5_uncertainty_penalty: float = 0.10
 
     random_seed: int = 42
     llm_enabled: bool = False

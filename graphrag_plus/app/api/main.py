@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,7 +66,7 @@ def query(request: QueryRequest) -> QueryResponse:
 
 
 @app.get("/graph")
-def graph_snapshot(limit: int = 500) -> dict[str, list[dict[str, str]]]:
+def graph_snapshot(limit: int = 500) -> dict[str, list[dict[str, Any]]]:
     """Return the full current graph (nodes + edges) for visualization.
 
     The ``limit`` caps each list defensively so the frontend never has to render
