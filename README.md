@@ -10,9 +10,9 @@
 > Generation** backend with hybrid retrieval, source trust modeling,
 > confidence calibration, contradiction handling, and graph versioning.
 
-GraphRAG++ is a pure backend service (FastAPI + Python). No UI, no
-notebook integrations — just a clean, well-instrumented engine you can
-drop into your own stack.
+GraphRAG++ ships as a **FastAPI backend** plus an optional **React + Vite
++ Tailwind dashboard** that visualises the knowledge graph and explains,
+step by step, how each answer was reached.
 
 ---
 
@@ -171,9 +171,14 @@ uvicorn graphrag_plus.app.api.main:app --reload
 | `GET`  | `/health`           | Liveness + capability info |
 | `POST` | `/ingest`           | Ingest local files and/or URLs |
 | `POST` | `/query`            | Hybrid retrieval + answer generation |
+| `GET`  | `/graph`            | Full graph snapshot (nodes + edges) for visualization |
 | `GET`  | `/graph/{node_id}`  | Neighborhood for a graph node |
 | `GET`  | `/evaluate`         | Run the benchmark stub |
 | `GET`  | `/metrics`          | Prometheus exposition |
+
+CORS origins are controlled by `GRAPHRAG_CORS_ORIGINS` (comma-separated).
+Defaults cover the local Vite dev servers (`http://localhost:5173`,
+`http://127.0.0.1:5173`).
 
 #### Example: ingest + query
 
@@ -226,6 +231,83 @@ More ready-to-run requests live in
 
 ---
 
+## Frontend dashboard
+
+The `frontend/` folder is a **React 18 + Vite 5 + Tailwind 3** SPA that
+talks to the FastAPI backend over the `VITE_API_BASE` URL.
+
+Highlights:
+
+- Dark-by-default UI with a polished light mode toggle
+- Glassmorphism cards, Framer Motion transitions, micro-interactions
+- **Interactive knowledge-graph view** (`react-force-graph-2d`) — zoom,
+  pan, hover, color-coded by node type
+- **Reasoning Story** panel — five animated steps explaining how the
+  answer was reached, with synchronized graph-node highlighting
+- Animated calibrated-confidence bar, failure-mode badge, evidence list
+- Toast notifications for success/error, loading skeletons, spinner states
+
+Run it locally (with the backend already running on `:8765`):
+
+```bash
+cd frontend
+cp .env.example .env       # optional — defaults to local backend
+npm install
+npm run dev                # http://localhost:5173
+```
+
+Build for production:
+
+```bash
+npm run build              # outputs to frontend/dist
+npm run preview            # http://localhost:4173
+```
+
+See [`frontend/README.md`](frontend/README.md) for full notes.
+
+---
+
+## Deployment
+
+### Backend — Render / Railway / Fly.io
+
+Any of these PaaS hosts work. The repo's existing layout means the
+backend's working directory should be `graphrag_plus/` and the Python
+package root should be the parent (`PYTHONPATH=.`).
+
+**Render** (recommended starting point):
+
+1. New → **Web Service** → connect this repo.
+2. **Root directory:** `graphrag_plus`
+3. **Build command:**
+   ```bash
+   python -m pip install --upgrade pip && python -m pip install -e .
+   ```
+4. **Start command:**
+   ```bash
+   PYTHONPATH=.. uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT
+   ```
+5. **Environment variables:**
+   - `GRAPHRAG_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`
+   - `PYTHON_VERSION=3.12`
+
+**Railway / Fly.io**: same idea — install `-e .`, set `PYTHONPATH=..`,
+start uvicorn binding to `$PORT`. On Fly.io, add a `Dockerfile` that
+copies the repo and runs the same command.
+
+### Frontend — Vercel
+
+1. **Import Project** → point at this repo, pick the `frontend/` folder
+   as the project root (Vercel auto-detects Vite).
+2. **Build command:** `npm run build` (default).
+3. **Output directory:** `dist` (default).
+4. **Environment variables:**
+   - `VITE_API_BASE=https://<your-backend-domain>`
+5. After deploy, copy the Vercel URL into the backend's
+   `GRAPHRAG_CORS_ORIGINS` env var so CORS preflights succeed.
+
+---
+
 ## Folder structure
 
 ```
@@ -233,6 +315,17 @@ GraphRAG-Plus/
 ├── README.md                   ← you are here
 ├── LICENSE                     ← MIT
 ├── .github/workflows/ci.yml    ← lint, format check, mypy, tests with coverage
+├── frontend/                   ← React + Vite + Tailwind dashboard
+│   ├── package.json
+│   ├── tailwind.config.js
+│   ├── vite.config.js
+│   ├── public/favicon.svg
+│   └── src/
+│       ├── App.jsx             ← layout + state orchestration
+│       ├── api.js              ← typed wrapper around FastAPI calls
+│       └── components/         ← Header, IngestPanel, QueryBox, ResultCard,
+│                                 ConfidenceBar, GraphView, ReasoningStory,
+│                                 ThemeToggle, Spinner
 └── graphrag_plus/
     ├── pyproject.toml          ← deps, extras, ruff/black/mypy/coverage config
     ├── .env.example

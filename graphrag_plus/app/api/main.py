@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from graphrag_plus.app.config.settings import get_settings
@@ -22,6 +25,21 @@ from graphrag_plus.app.utils.metrics import METRICS
 settings = get_settings()
 pipeline = GraphRAGPipeline(settings)
 app = FastAPI(title="GraphRAG++")
+
+# CORS — origins controlled by env (comma-separated). Defaults are local Vite dev servers.
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_origins = [
+    origin.strip()
+    for origin in os.environ.get("GRAPHRAG_CORS_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -44,6 +62,19 @@ def ingest(request: IngestRequest) -> IngestResponse:
 def query(request: QueryRequest) -> QueryResponse:
     """Run question answering."""
     return pipeline.query(request)
+
+
+@app.get("/graph")
+def graph_snapshot(limit: int = 500) -> dict[str, list[dict[str, object]]]:
+    """Return the full current graph (nodes + edges) for visualization.
+
+    The ``limit`` caps each list defensively so the frontend never has to render
+    a runaway graph.
+    """
+    snapshot = pipeline.graph_store.current_snapshot()
+    nodes = snapshot.get("nodes", [])[:limit]
+    edges = snapshot.get("edges", [])[:limit]
+    return {"nodes": nodes, "edges": edges}
 
 
 @app.get("/graph/{node_id}", response_model=GraphResponse)
