@@ -65,17 +65,10 @@ export default function GraphView({ snapshot, highlights, theme }) {
     return () => ro.disconnect();
   }, []);
 
-  // When highlights change, briefly center on the first highlighted node.
-  useEffect(() => {
-    if (!highlights?.length || !data.nodes.length || !fgRef.current) return;
-    const target = data.nodes.find((n) => highlights.includes(n.id));
-    if (!target) return;
-    const fg = fgRef.current;
-    if (typeof target.x === "number" && typeof target.y === "number") {
-      fg.centerAt(target.x, target.y, 800);
-      fg.zoom(2.5, 800);
-    }
-  }, [highlights, data.nodes]);
+  // Highlights change every reasoning-story step; we deliberately do NOT
+  // re-center or re-zoom here so the user keeps full manual control over
+  // the graph viewport. Visual emphasis is handled below via node glow +
+  // directional particles.
 
   const highlightSet = useMemo(() => new Set(highlights || []), [highlights]);
 

@@ -92,7 +92,7 @@ export default function App() {
       <main className="mx-auto grid max-w-[1600px] gap-5 px-6 py-6 lg:grid-cols-12">
         {/* LEFT PANEL: ingest + reasoning story */}
         <div className="flex flex-col gap-5 lg:col-span-3">
-          <IngestPanel onIngested={handleIngested} />
+          <IngestPanel onIngested={handleIngested} snapshot={snapshot} />
           <ReasoningStory
             steps={steps}
             enabled={storyOn && steps.length > 0}

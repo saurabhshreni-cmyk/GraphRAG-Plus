@@ -13,12 +13,34 @@ import Spinner from "./Spinner.jsx";
 // A third inline mode uses the browser's File API + FormData via a future
 // /ingest_text endpoint; until then we surface a clear hint.
 
-export default function IngestPanel({ onIngested }) {
+export default function IngestPanel({ onIngested, snapshot }) {
   const [filePathsRaw, setFilePathsRaw] = useState("");
   const [urlsRaw, setUrlsRaw] = useState("");
   const [busy, setBusy] = useState(false);
-  const [stats, setStats] = useState(null);
   const dropRef = useRef(null);
+
+  // Derive cumulative graph counts from the live snapshot so this panel
+  // reflects the *current* knowledge graph, not the size of the last
+  // ingest batch (which was the source of confusing entity counts before).
+  const graphStats = (() => {
+    const nodes = snapshot?.nodes ?? [];
+    const edges = snapshot?.edges ?? [];
+    const byType = nodes.reduce((acc, node) => {
+      const t = node.node_type || "Other";
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+    const documents = byType.Document || 0;
+    const chunks = byType.Chunk || 0;
+    // Everything that isn't Document / Chunk counts as an entity-like node.
+    const entities = Object.entries(byType)
+      .filter(([t]) => t !== "Document" && t !== "Chunk")
+      .reduce((sum, [, count]) => sum + count, 0);
+    const relations = edges.filter(
+      (e) => !["contains", "mentions"].includes(e.edge_type),
+    ).length;
+    return { documents, chunks, entities, relations };
+  })();
 
   const submit = async () => {
     const filePaths = filePathsRaw
@@ -36,9 +58,8 @@ export default function IngestPanel({ onIngested }) {
     setBusy(true);
     try {
       const result = await api.ingest({ filePaths, urls });
-      setStats(result);
       toast.success(
-        `Ingested ${result.documents} doc(s), ${result.entities} entities`,
+        `Ingested ${result.documents} doc(s), ${result.entities} entities (this batch)`,
       );
       onIngested?.(result);
     } catch (err) {
@@ -109,19 +130,24 @@ export default function IngestPanel({ onIngested }) {
           {busy ? <Spinner /> : <PlusIcon />}
           Ingest
         </button>
-        {stats && !busy && (
-          <motion.div
-            key={stats.graph_version_id}
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-3 text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500"
-          >
-            <Stat label="docs" value={stats.documents} />
-            <Stat label="chunks" value={stats.chunks} />
-            <Stat label="entities" value={stats.entities} />
-            <Stat label="relations" value={stats.relations} />
-          </motion.div>
-        )}
+      </div>
+
+      <div className="mt-4 border-t border-white/5 pt-3 [html:not(.dark)_&]:border-ink-200">
+        <div className="mb-1.5 text-[10px] uppercase tracking-wider text-ink-500">
+          Graph total
+        </div>
+        <motion.div
+          layout
+          key={`${graphStats.documents}-${graphStats.entities}-${graphStats.relations}`}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-wrap items-center gap-2 text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500"
+        >
+          <Stat label="docs" value={graphStats.documents} />
+          <Stat label="chunks" value={graphStats.chunks} />
+          <Stat label="entities" value={graphStats.entities} />
+          <Stat label="relations" value={graphStats.relations} />
+        </motion.div>
       </div>
     </motion.section>
   );
