@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("graphrag_plus/data"))
     reports_dir: Path = Field(default=Path("graphrag_plus/data/reports"))
     graph_path: Path = Field(default=Path("graphrag_plus/data/graph.json"))
+    chunks_path: Path = Field(default=Path("graphrag_plus/data/chunks.json"))
     graph_versions_dir: Path = Field(default=Path("graphrag_plus/data/graph_versions"))
     trust_state_path: Path = Field(default=Path("graphrag_plus/data/trust_state.json"))
     calibration_state_path: Path = Field(default=Path("graphrag_plus/data/calibration_state.json"))

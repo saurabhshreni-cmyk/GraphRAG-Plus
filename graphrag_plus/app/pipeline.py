@@ -47,7 +47,7 @@ class GraphRAGPipeline:
         apply_global_seed(settings.random_seed)
         self.graph_store = GraphStore(settings.graph_path)
         self.version_manager = GraphVersionManager(settings.graph_versions_dir, settings.answers_log_path)
-        self.retrieval = RetrievalService(self.graph_store)
+        self.retrieval = RetrievalService(self.graph_store, settings.chunks_path)
         self.trust_manager = SourceTrustManager(
             settings.trust_state_path,
             settings.default_trust_prior,
@@ -247,7 +247,15 @@ class GraphRAGPipeline:
         module_timings["scoring_ms"] = self._ms_since(scoring_start)
 
         top = scored[: request.top_k] if scored else []
-        raw_confidence = float(sum(item["confidence_score"] for item in top) / len(top)) if top else 0.0
+        # Use the *pre-normalization* confidence so a strong single-doc match
+        # doesn't get crushed to 0.5 by min-max scaling. Falls back to the
+        # normalized value for older candidate rows that don't carry the raw
+        # field.
+        raw_confidence = (
+            float(sum(item.get("raw_confidence_score", item["confidence_score"]) for item in top) / len(top))
+            if top
+            else 0.0
+        )
 
         calibrated_confidence, calibration_error = self._calibrate(raw_confidence)
 

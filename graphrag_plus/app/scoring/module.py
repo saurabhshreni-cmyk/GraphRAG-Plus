@@ -35,11 +35,16 @@ class ScoringModule:
                 - self.weights["w5"] * uncertainty[idx]
             )
             enriched = dict(candidate)
+            # Preserve the pre-normalization confidence so downstream callers
+            # (calibration, failure classifier) don't see every single-candidate
+            # query collapsed to 0.5 by min-max normalization.
+            raw_confidence = float(candidate.get("confidence_score", confidence[idx]))
             enriched.update(
                 {
                     "semantic_score": semantic[idx],
                     "graph_score": graph[idx],
                     "confidence_score": confidence[idx],
+                    "raw_confidence_score": raw_confidence,
                     "trust_score": trust[idx],
                     "uncertainty_penalty": uncertainty[idx],
                     "final_score": final_score,

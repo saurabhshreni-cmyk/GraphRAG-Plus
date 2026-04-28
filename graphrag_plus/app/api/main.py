@@ -65,16 +65,17 @@ def query(request: QueryRequest) -> QueryResponse:
 
 
 @app.get("/graph")
-def graph_snapshot(limit: int = 500) -> dict[str, list[dict[str, object]]]:
+def graph_snapshot(limit: int = 500) -> dict[str, list[dict[str, str]]]:
     """Return the full current graph (nodes + edges) for visualization.
 
     The ``limit`` caps each list defensively so the frontend never has to render
     a runaway graph.
     """
     snapshot = pipeline.graph_store.current_snapshot()
-    nodes = snapshot.get("nodes", [])[:limit]
-    edges = snapshot.get("edges", [])[:limit]
-    return {"nodes": nodes, "edges": edges}
+    return {
+        "nodes": snapshot.get("nodes", [])[:limit],
+        "edges": snapshot.get("edges", [])[:limit],
+    }
 
 
 @app.get("/graph/{node_id}", response_model=GraphResponse)
