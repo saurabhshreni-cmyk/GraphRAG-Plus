@@ -218,17 +218,23 @@ class AnswerGenerator:
 
         extractive = self._extractive_answer(question, evidence)
 
-        # Use LLM only when it's both enabled AND likely to add value
-        # (low/medium confidence). High-confidence answers from a single
-        # crisp chunk are best left extractive.
-        if self.llm_enabled and confidence < answer_threshold:
-            try:
-                llm_answer = self._llm_answer(question, evidence)
-                if llm_answer:
-                    return llm_answer, True, False
-            except Exception:
-                # LLM blew up — be loud about it via flags but still answer
-                # the user with the deterministic fallback.
-                return extractive, False, True
-
-        return extractive, False, False
+        # Flow (matches the architecture diagram):
+        #     evidence empty             -> abstain, never call LLM (handled above)
+        #     llm_enabled=False          -> extractive
+        #     llm_enabled=True
+        #         confidence >= threshold -> extractive (already strong, save tokens)
+        #         confidence <  threshold -> LLM, with extractive fallback on error
+        if not self.llm_enabled:
+            return extractive, False, False
+        if confidence >= answer_threshold:
+            return extractive, False, False
+        try:
+            llm_answer = self._llm_answer(question, evidence)
+            if llm_answer:
+                return llm_answer, True, False
+            # Empty LLM response -> treat as soft failure, fall back gracefully.
+            return extractive, False, True
+        except Exception:
+            # LLM raised (timeout / connection / decode) -> extractive fallback,
+            # surface llm_failed=True in the flags for observability.
+            return extractive, False, True

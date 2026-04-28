@@ -15,6 +15,7 @@ from graphrag_plus.app.contradiction.reasoner import ContradictionReasoner
 from graphrag_plus.app.extraction.extractor import extract_from_chunks
 from graphrag_plus.app.failure.handler import FailureModeHandler
 from graphrag_plus.app.generation.generator import AnswerGenerator
+from graphrag_plus.app.generation.llm_clients import build_default_llm_client
 from graphrag_plus.app.gnn.scorer import GNNScorer
 from graphrag_plus.app.graph.store import GraphStore
 from graphrag_plus.app.graph.versioning.manager import GraphVersionManager
@@ -67,7 +68,10 @@ class GraphRAGPipeline:
         self.failure_handler = FailureModeHandler()
         self.active_learning = ActiveLearningManager(settings.review_queue_path)
         self.analyst = AnalystEngine()
-        self.generator = AnswerGenerator(settings.llm_enabled)
+        self.generator = AnswerGenerator(
+            settings.llm_enabled,
+            build_default_llm_client(llm_enabled=settings.llm_enabled),
+        )
         self.gnn = GNNScorer()
         self.latest_changed_nodes: list[str] = []
         self.latest_graph_version: str | None = None
@@ -367,6 +371,7 @@ class GraphRAGPipeline:
             calibrated_confidence=calibrated_confidence,
             calibration_error=calibration_error,
             used_llm=used_llm,
+            generated_by="llm" if used_llm else "extractive",
             evidence=evidence_items,
             evidence_paths=evidence_paths,
             explanation=failure["explanation"] or "Answer generated from top ranked evidence.",

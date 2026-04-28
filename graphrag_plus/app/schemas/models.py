@@ -79,6 +79,7 @@ class QueryResponse(BaseModel):
     calibrated_confidence: float
     calibration_error: float
     used_llm: bool
+    generated_by: str = "extractive"
     evidence: list[EvidenceItem] = Field(default_factory=list)
     evidence_paths: list[list[str]] = Field(default_factory=list)
     explanation: str
