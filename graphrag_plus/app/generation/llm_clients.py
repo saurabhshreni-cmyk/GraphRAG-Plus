@@ -37,7 +37,9 @@ ANTHROPIC_MODEL_DEFAULT = "claude-3-5-haiku-latest"
 ANTHROPIC_VERSION = "2023-06-01"
 
 OLLAMA_URL_DEFAULT = "http://localhost:11434/api/generate"
-OLLAMA_MODEL_DEFAULT = "gemma4:e2b"
+# Default to qwen3.5:4b — fits in less RAM than gemma4:e2b and reloads
+# reliably on memory-constrained hosts. Override with OLLAMA_MODEL.
+OLLAMA_MODEL_DEFAULT = "qwen3.5:4b"
 
 _SYSTEM_PROMPT = (
     "You are GraphRAG++'s answer composer. Answer the user's question using "
@@ -166,7 +168,7 @@ class LocalLLMClient:
         *,
         url: str | None = None,
         model: str = OLLAMA_MODEL_DEFAULT,
-        timeout_s: float = 20.0,
+        timeout_s: float = 60.0,
         max_context_chars: int = 4000,
     ):
         self.url = url or os.environ.get("OLLAMA_URL", OLLAMA_URL_DEFAULT)
@@ -187,6 +189,11 @@ class LocalLLMClient:
             "model": self.model,
             "prompt": prompt,
             "stream": False,
+            # Disable Ollama's thinking mode (Qwen3, DeepSeek-R1, etc. emit
+            # long internal reasoning by default which can take 100+s for a
+            # one-line answer). We want the visible response only. Models that
+            # don't support thinking mode ignore this flag.
+            "think": False,
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
