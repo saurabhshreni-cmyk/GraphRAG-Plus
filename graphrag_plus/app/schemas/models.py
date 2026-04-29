@@ -44,6 +44,11 @@ class QueryRequest(BaseModel):
     analyst_mode: bool = False
     start_time: datetime | None = None
     end_time: datetime | None = None
+    # Per-request override for the LLM path. ``None`` means "use the
+    # server-wide ``settings.llm_enabled``"; an explicit ``True`` / ``False``
+    # forces the strategy for this query only. Keeps trust-aware gating
+    # intact: ``NO_EVIDENCE`` still skips the LLM regardless of this flag.
+    llm_enabled: bool | None = None
 
 
 class EvidenceItem(BaseModel):

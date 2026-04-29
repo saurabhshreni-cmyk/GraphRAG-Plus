@@ -19,11 +19,22 @@ export default function Header({ healthStatus, theme, onToggleTheme }) {
     >
       <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-4">
         <div className="flex items-center gap-3">
-          <LogoMark />
+          <motion.div
+            initial={{ rotate: -8, scale: 0.9 }}
+            animate={{ rotate: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 200, damping: 18 }}
+          >
+            <LogoMark />
+          </motion.div>
           <div className="leading-tight">
-            <h1 className="text-base font-semibold tracking-tight text-ink-50 [html:not(.dark)_&]:text-ink-900">
-              GraphRAG
-              <span className="text-accent-400">++</span>
+            <h1 className="text-base font-semibold tracking-tight">
+              <span className="bg-gradient-to-br from-ink-50 to-ink-300 bg-clip-text text-transparent
+                               [html:not(.dark)_&]:from-ink-900 [html:not(.dark)_&]:to-ink-600">
+                GraphRAG
+              </span>
+              <span className="bg-gradient-to-br from-accent-400 to-accent-600 bg-clip-text text-transparent">
+                ++
+              </span>
             </h1>
             <p className="text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500">
               Trust-aware Graph Retrieval Augmented Generation

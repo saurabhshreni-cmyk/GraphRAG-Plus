@@ -55,15 +55,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ file_paths: filePaths, urls }),
     }),
-  query: ({ question, analystMode = true, topK = 5 }) =>
-    request("/query", {
+  query: ({ question, analystMode = true, topK = 5, llmEnabled = null }) => {
+    const body = { question, top_k: topK, analyst_mode: analystMode };
+    if (llmEnabled !== null) body.llm_enabled = llmEnabled;
+    return request("/query", {
       method: "POST",
-      body: JSON.stringify({
-        question,
-        top_k: topK,
-        analyst_mode: analystMode,
-      }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
   graph: (limit = 500) => request(`/graph?limit=${limit}`),
 };
 

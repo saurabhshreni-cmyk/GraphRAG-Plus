@@ -272,6 +272,12 @@ class GraphRAGPipeline:
             evidence_items, request.question
         )
 
+        # Per-request LLM override — restored after generation so the global
+        # default isn't perturbed across requests.
+        prior_llm_enabled = self.generator.llm_enabled
+        if request.llm_enabled is not None:
+            self.generator.llm_enabled = request.llm_enabled
+
         generation_start = time.perf_counter()
         answer_text, used_llm, llm_failed = self._safe(
             "generation.generate",
@@ -284,6 +290,8 @@ class GraphRAGPipeline:
             ("I cannot answer reliably due to an internal error.", False, True),
         )
         module_timings["generation_ms"] = self._ms_since(generation_start)
+        # Restore the global default so subsequent requests aren't affected.
+        self.generator.llm_enabled = prior_llm_enabled
 
         failure = self.failure_handler.classify(
             has_evidence=bool(evidence_items),

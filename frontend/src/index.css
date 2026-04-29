@@ -16,10 +16,27 @@ body {
   font-feature-settings: "ss01", "cv11";
 }
 
-/* Subtle dotted background that respects theme. */
+/* Subtle dotted background + ambient gradient that respects theme. */
 .app-shell {
   background-image: var(--app-grid);
   background-size: 28px 28px;
+  position: relative;
+  isolation: isolate;
+}
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60rem 40rem at 10% -10%, rgba(91, 140, 255, 0.10), transparent 60%),
+    radial-gradient(50rem 40rem at 110% 110%, rgba(247, 143, 179, 0.08), transparent 60%);
+  pointer-events: none;
+}
+html:not(.dark) .app-shell::before {
+  background:
+    radial-gradient(60rem 40rem at 10% -10%, rgba(91, 140, 255, 0.07), transparent 60%),
+    radial-gradient(50rem 40rem at 110% 110%, rgba(247, 143, 179, 0.05), transparent 60%);
 }
 
 .dark {
@@ -51,6 +68,16 @@ html:not(.dark) {
   box-shadow:
     0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
     0 12px 40px -12px rgba(0, 0, 0, 0.6);
+  transition:
+    border-color 200ms ease,
+    box-shadow 250ms ease,
+    transform 250ms ease;
+}
+.glass:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.05) inset,
+    0 16px 48px -14px rgba(0, 0, 0, 0.7);
 }
 
 html:not(.dark) .glass {
@@ -61,6 +88,25 @@ html:not(.dark) .glass {
   );
   border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 8px 24px -10px rgba(15, 23, 42, 0.18);
+}
+html:not(.dark) .glass:hover {
+  border-color: rgba(15, 23, 42, 0.16);
+  box-shadow: 0 12px 32px -10px rgba(15, 23, 42, 0.22);
+}
+
+/* Reduce motion when user prefers it */
+@media (prefers-reduced-motion: reduce) {
+  .glass {
+    transition: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Custom thin scrollbar */
