@@ -25,6 +25,11 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
+# Sentinel string the LLM is instructed to emit when evidence doesn't cover
+# the question. Detecting it lets us fall back to extractive output instead
+# of returning a verbatim refusal that the user can't act on.
+LLM_ABSTAIN_TOKEN = "I cannot answer based on the provided context."
+
 # Stopwords used for scoring sentences against the query. Kept in sync with
 # the retrieval service philosophy: we want content overlap, not boilerplate
 # overlap.
@@ -175,6 +180,33 @@ class AnswerGenerator:
         return "Evidence was found but insufficient for a complete answer."
 
     # ---------------------------------------------------------------- LLM path
+    @staticmethod
+    def _build_context(evidence: list[dict[str, object]]) -> str:
+        """Top-3 strongest chunks, deduped sentence-by-sentence.
+
+        Sorted-by-final-score happens upstream (ScoringModule), so we just
+        take the prefix here. We split into sentences so duplicate sentences
+        across overlapping chunks (common when ingestion produced
+        near-identical paragraphs) don't show up twice in the prompt.
+        """
+        seen: set[str] = set()
+        rendered: list[str] = []
+        for idx, item in enumerate(evidence[:3]):
+            source = str(item.get("source_id", "?"))
+            snippet = str(item.get("snippet", "") or "").strip()
+            if not snippet:
+                continue
+            kept_sentences: list[str] = []
+            for sentence in _split_sentences(snippet):
+                key = sentence.lower().rstrip(".!?").strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                kept_sentences.append(sentence)
+            if kept_sentences:
+                rendered.append(f"[{idx + 1}] ({source}) {' '.join(kept_sentences)}")
+        return "\n".join(rendered)
+
     def _llm_answer(self, question: str, evidence: list[dict[str, object]]) -> str:
         client = self.llm_client
         if client is None:
@@ -182,19 +214,33 @@ class AnswerGenerator:
             # behaviour stays predictable in test environments.
             best = str(evidence[0].get("snippet", "") or "")[:240]
             return f"LLM-style synthesis: {best}".strip()
-        # Build a compact, grounded prompt — only retrieved snippets, no
-        # external context.
-        ctx_lines = []
-        for idx, item in enumerate(evidence[:5]):
-            source = str(item.get("source_id", "?"))
-            snippet = str(item.get("snippet", "") or "").strip()
-            if snippet:
-                ctx_lines.append(f"[{idx + 1}] ({source}) {snippet}")
-        context = "\n".join(ctx_lines)
+        context = self._build_context(evidence)
         return client.complete(question, context).strip()
 
+    # --------------------------------------------------------- quality filter
+    @staticmethod
+    def _llm_answer_passes_quality(question: str, answer: str) -> bool:
+        """Reject LLM output that doesn't share key terms with the question.
+
+        Without this gate a model that drifts off-topic ("Here is a poem
+        about graphs...") would be returned to the user verbatim. We require
+        either at least one shared content token, OR — for very short
+        questions — that the answer be substantive (>= 6 content tokens).
+        """
+        q_tokens = _tokens(question)
+        a_tokens = _tokens(answer)
+        if not q_tokens:
+            return bool(a_tokens)
+        if q_tokens & a_tokens:
+            return True
+        # If the question has only one content token (e.g. "NetworkX?") and
+        # the answer is substantive, allow it through. The retrieval gate
+        # already enforced that the chunks are on-topic, so the answer is
+        # almost certainly grounded even if it paraphrases the term.
+        return len(q_tokens) <= 1 and len(a_tokens) >= 6
+
     # ----------------------------------------------------------------- public
-    def generate(
+    def generate(  # noqa: PLR0911 -- early returns mirror the documented gate flow
         self,
         question: str,
         evidence: list[dict[str, object]],
@@ -230,11 +276,27 @@ class AnswerGenerator:
             return extractive, False, False
         try:
             llm_answer = self._llm_answer(question, evidence)
-            if llm_answer:
-                return llm_answer, True, False
-            # Empty LLM response -> treat as soft failure, fall back gracefully.
-            return extractive, False, True
         except Exception:
             # LLM raised (timeout / connection / decode) -> extractive fallback,
             # surface llm_failed=True in the flags for observability.
             return extractive, False, True
+
+        if not llm_answer:
+            # Empty response -> soft failure, fall back to extractive.
+            return extractive, False, True
+
+        # The LLM was instructed to emit a fixed abstain string when the
+        # context doesn't cover the question. We have evidence (this branch
+        # only runs when len(evidence) > 0), so an abstain means the model
+        # disagreed with retrieval. Trust retrieval and fall back to the
+        # extractive sentence-rank answer.
+        if LLM_ABSTAIN_TOKEN.lower().rstrip(".") in llm_answer.lower():
+            return extractive, False, True
+
+        # Quality filter: reject completions that drifted off-topic. The
+        # retrieval gates already ensure the chunks share query terms with
+        # the question, so the answer should too.
+        if not self._llm_answer_passes_quality(question, llm_answer):
+            return extractive, False, True
+
+        return llm_answer, True, False

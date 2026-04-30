@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
 
-from graphrag_plus.app.generation.generator import LLMClient
+from graphrag_plus.app.generation.generator import LLM_ABSTAIN_TOKEN, LLMClient
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -49,16 +50,64 @@ _SYSTEM_PROMPT = (
 )
 
 _OLLAMA_PROMPT_TEMPLATE = (
-    "You are answering strictly based on the following evidence:\n\n"
-    "{context}\n\n"
-    "Question:\n{question}\n\n"
-    "Instructions:\n"
-    "- Answer clearly and concisely\n"
-    "- Use ONLY the provided evidence\n"
-    "- Do NOT add external knowledge\n"
-    "- If the answer is not in the evidence, say you cannot answer\n\n"
-    "Answer:"
+    "You are answering based ONLY on the provided evidence.\n\n"
+    "EVIDENCE:\n{context}\n\n"
+    "QUESTION:\n{question}\n\n"
+    "INSTRUCTIONS:\n"
+    "- Answer in 2-4 sentences maximum\n"
+    "- Start with a direct definition\n"
+    "- Use simple and clear language\n"
+    "- Do NOT include unrelated information\n"
+    "- Do NOT repeat sentences\n"
+    "- Do NOT hallucinate\n"
+    "- If the answer is not in the evidence, say: "
+    "'I cannot answer based on the provided context.'\n\n"
+    "ANSWER:"
 )
+
+# Caps for post-processing.
+_MAX_ANSWER_SENTENCES = 5
+# Sentence boundary that handles "." / "!" / "?" followed by whitespace.
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+# Generic prefixes some local models like to emit ("Answer:", "Sure!", etc.)
+_PREFIX_RE = re.compile(
+    r"^(?:answer\s*[:\-]\s*|response\s*[:\-]\s*|sure[!,]?\s*|certainly[!,]?\s*|here(?:'s| is)\s+)",
+    re.IGNORECASE,
+)
+
+
+def postprocess_llm_answer(text: str) -> str:
+    """Tidy up an LLM completion before it leaves the client.
+
+    * Strip leading boilerplate (``Answer:``, ``Sure!``, ...).
+    * Collapse whitespace and remove duplicate adjacent sentences.
+    * Cap to ``_MAX_ANSWER_SENTENCES`` so verbose models stay in budget.
+
+    Pure string transform — no semantic changes — so it's safe to apply
+    universally to every LocalLLMClient response.
+    """
+    if not text:
+        return ""
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    # Drop one leading "Answer:" / "Sure!" / etc.
+    stripped = _PREFIX_RE.sub("", cleaned, count=1).strip()
+    if not stripped:
+        stripped = cleaned
+    # De-duplicate sentences while preserving order.
+    sentences = [s.strip() for s in _SENTENCE_BOUNDARY_RE.split(stripped) if s.strip()]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for sentence in sentences:
+        key = sentence.lower().rstrip(".!?")
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(sentence)
+        if len(deduped) >= _MAX_ANSWER_SENTENCES:
+            break
+    if not deduped:
+        return stripped
+    return " ".join(deduped)
 
 
 class EchoClient:
@@ -229,7 +278,8 @@ class LocalLLMClient:
             logger.warning("ollama.decode_failed error=%s body=%r", exc, body[:200])
             raise
         # Non-streaming /api/generate returns {"response": "...", "done": true, ...}
-        return str(parsed.get("response", "")).strip()
+        raw = str(parsed.get("response", ""))
+        return postprocess_llm_answer(raw)
 
 
 def _ollama_available(url: str = OLLAMA_URL_DEFAULT, timeout_s: float = 1.0) -> bool:
@@ -271,9 +321,11 @@ def build_default_llm_client(*, llm_enabled: bool) -> LLMClient | None:
 
 
 __all__ = [
+    "LLM_ABSTAIN_TOKEN",
     "AnthropicClient",
     "EchoClient",
     "LLMClient",
     "LocalLLMClient",
     "build_default_llm_client",
+    "postprocess_llm_answer",
 ]
