@@ -13,7 +13,7 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from graphrag_plus.app.graph.store import GraphStore
 from graphrag_plus.app.ingestion.models import Chunk
 from graphrag_plus.app.utils.io_utils import dump_json, load_json
-from graphrag_plus.app.utils.logging_utils import get_logger
+from graphrag_plus.app.utils.logging_utils import get_logger, log_event
 from graphrag_plus.app.utils.math_utils import safe_entropy
 
 # Use sklearn's built-in English stopword list so BM25 + tokenizer agree with
@@ -21,11 +21,32 @@ from graphrag_plus.app.utils.math_utils import safe_entropy
 # etc. drive matches for off-topic queries.
 _STOPWORDS = frozenset(ENGLISH_STOP_WORDS)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
-# Minimum normalized lexical+semantic score required for a candidate to be
-# considered relevant. Below this threshold the retrieval service abstains so
-# that genuinely off-topic questions return NO_EVIDENCE instead of a confident
-# wrong answer.
-_MIN_RELEVANCE = 0.05
+
+# --- relevance gates --------------------------------------------------------
+# Loosely-related chunks were leaking through and diluting answers (e.g.
+# "what is graph data structure?" pulled in adjacency-matrix text alongside
+# the correct chunk). The defaults below were tuned against the demo corpus
+# so that:
+#   * top-1 wins decisively, runner-ups only join if they're genuinely close,
+#   * off-topic questions return NO_EVIDENCE instead of a confident wrong
+#     answer.
+#
+# Either signal alone is enough to keep a candidate:
+#   - blended (cosine + BM25) >= ``_MIN_BLEND``, OR
+#   - cosine alone >= ``_MIN_COSINE`` (semantic similarity is the dominant
+#     signal so a strong cosine wins even if BM25 is noisy / zero), OR
+#   - graph hit (entity-level overlap with the question).
+#
+# In addition, chunks must share at least one non-stopword token with the
+# question OR have cosine >= ``_STRONG_COSINE``. That blocks chunks that
+# share zero query terms but happen to register a tiny cosine residual.
+_MIN_BLEND = 0.20
+_MIN_COSINE = 0.20
+_STRONG_COSINE = 0.30
+# Blend ratio: semantic dominates so on-topic cosine matches outrank lexical
+# noise. BM25 still contributes for keyword recall.
+_W_COSINE = 0.7
+_W_BM25 = 0.3
 
 logger = get_logger(__name__)
 
@@ -131,64 +152,119 @@ class RetrievalService:
         self._build(list(merged.values()), persist=True)
 
     def query(self, question: str, top_k: int, trust_lookup: dict[str, float]) -> list[dict[str, float]]:
-        """Retrieve candidates with base scores."""
+        """Retrieve candidates with base scores.
+
+        Pipeline:
+            1. Score every chunk on cosine + BM25 + graph hits.
+            2. Reject chunks that share no query term and have weak cosine
+               (term-overlap gate).
+            3. Reject chunks below the relevance floor (combined OR cosine).
+            4. Sort by blended score and return top-k * 3.
+            5. Log every decision so retrieval quality is debuggable.
+        """
         if not self.chunks or self.chunk_matrix is None or self.bm25 is None:
-            logger.info(
-                "retrieval.empty_index question=%r chunks=%d",
-                question[:60],
-                len(self.chunks),
+            log_event(
+                logger,
+                "retrieval.empty_index",
+                {"question": question[:80], "chunks": len(self.chunks)},
             )
             return []
 
         question_vec = self.vectorizer.transform([question])
         cosine = (self.chunk_matrix @ question_vec.T).toarray().ravel()
         question_tokens = _tokenize(question) or [question.lower()]
+        question_token_set = set(question_tokens)
         bm25_scores = np.array(self.bm25.get_scores(question_tokens))
         graph_hits = self._graph_hit_scores(question)
 
-        # rank-bm25 returns negative scores for tiny corpora (its IDF term goes
-        # negative when most documents contain the query term). Clamp at 0 so
-        # negative BM25 doesn't cancel a strong cosine match.
+        # Clamp negative BM25 (rank-bm25 returns negatives on tiny corpora)
+        # and normalize against the corpus max so the lexical signal sits
+        # in roughly the same range as cosine.
         bm25_scores = np.clip(bm25_scores, 0.0, None)
         bm25_max = float(bm25_scores.max()) if bm25_scores.size else 0.0
         bm25_norm = bm25_scores / bm25_max if bm25_max > 0 else bm25_scores
 
         rows: list[dict[str, float]] = []
+        rejected: list[dict[str, object]] = []
         for idx, chunk in enumerate(self.chunks):
             source_id = chunk.doc_id
-            semantic = float(cosine[idx])
+            semantic_cos = float(cosine[idx])
             keyword = float(bm25_norm[idx])
             graph_score = graph_hits.get(chunk.chunk_id, 0.0)
-            # Combined lexical+semantic score in [0, 1]-ish range.
-            blended = 0.6 * semantic + 0.4 * keyword
-            base_confidence = 0.5 + min(0.5, max(0.0, blended))
-            trust_score = trust_lookup.get(source_id, 0.5)
-            uncertainty = safe_entropy(base_confidence)
-            rows.append(
-                {
-                    "id": chunk.chunk_id,
-                    "source_id": source_id,
-                    "snippet": chunk.text[:300],
-                    "semantic_score": blended,
-                    "graph_score": graph_score,
-                    "confidence_score": base_confidence,
-                    "trust_score": trust_score,
-                    "uncertainty_penalty": uncertainty,
-                    # Preserve a copy of the raw lexical+semantic score so that
-                    # post-normalization downstream doesn't erase scale info.
-                    "raw_relevance": blended,
-                }
-            )
+            # Weighted blend favouring cosine, with BM25 as a secondary
+            # signal. Stays roughly in [0, 1].
+            blended = _W_COSINE * semantic_cos + _W_BM25 * keyword
 
-        # Drop chunks below the minimum-relevance bar so that off-topic
-        # questions return NO_EVIDENCE rather than a confident wrong answer.
-        # A graph-hit alone is enough to keep a candidate (it indicates an
-        # entity-level match even if surface tokens differ).
-        scored = [row for row in rows if row["semantic_score"] >= _MIN_RELEVANCE or row["graph_score"] > 0]
-        if not scored:
-            return []
-        scored.sort(key=lambda item: item["semantic_score"], reverse=True)
-        return scored[: max(top_k * 3, 10)]
+            # Term-overlap gate: at least one non-stopword query token must
+            # appear in this chunk, OR cosine must be strong enough that we
+            # trust the semantic match even without lexical overlap.
+            chunk_tokens = self._tokenized[idx] if idx < len(self._tokenized) else _tokenize(chunk.text)
+            shares_term = bool(question_token_set.intersection(chunk_tokens))
+            cosine_strong = semantic_cos >= _STRONG_COSINE
+
+            # Relevance gate: the blend OR cosine must clear the threshold,
+            # OR the graph picked up an entity-level match.
+            blend_strong = blended >= _MIN_BLEND
+            cos_above_floor = semantic_cos >= _MIN_COSINE
+            graph_strong = graph_score > 0
+
+            base_row = {
+                "id": chunk.chunk_id,
+                "source_id": source_id,
+                "snippet": chunk.text[:300],
+                "semantic_score": blended,
+                "graph_score": graph_score,
+                "confidence_score": 0.5 + min(0.5, max(0.0, blended)),
+                "trust_score": trust_lookup.get(source_id, 0.5),
+                "uncertainty_penalty": safe_entropy(0.5 + min(0.5, max(0.0, blended))),
+                # Preserve raw signals so downstream normalization doesn't
+                # erase absolute scale.
+                "raw_relevance": blended,
+                "raw_cosine": semantic_cos,
+                "raw_bm25": keyword,
+            }
+
+            if not (shares_term or cosine_strong):
+                rejected.append({**base_row, "reason": "no_term_overlap"})
+                continue
+            if not (blend_strong or cos_above_floor or graph_strong):
+                rejected.append({**base_row, "reason": "below_threshold"})
+                continue
+            rows.append(base_row)
+
+        rows.sort(key=lambda item: item["semantic_score"], reverse=True)
+        kept = rows[: max(top_k * 3, 10)]
+
+        # Structured per-query log: kept and rejected chunks with their raw
+        # signals. Use INFO so it shows up in standard backend logs.
+        log_event(
+            logger,
+            "retrieval.query",
+            {
+                "question": question[:120],
+                "tokens": question_tokens,
+                "kept": [
+                    {
+                        "id": r["id"],
+                        "cos": round(r["raw_cosine"], 3),
+                        "bm25": round(r["raw_bm25"], 3),
+                        "blend": round(r["raw_relevance"], 3),
+                        "graph": round(r["graph_score"], 3),
+                    }
+                    for r in kept
+                ],
+                "rejected": [
+                    {
+                        "id": r["id"],
+                        "cos": round(float(r["raw_cosine"]), 3),
+                        "bm25": round(float(r["raw_bm25"]), 3),
+                        "reason": r["reason"],
+                    }
+                    for r in rejected[:5]
+                ],
+            },
+        )
+        return kept
 
     def _graph_hit_scores(self, question: str) -> dict[str, float]:
         keywords = set(_tokenize(question))
