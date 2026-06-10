@@ -294,7 +294,35 @@ Good local demo questions:
 
 ## Deployment
 
-### Backend — Render / Railway / Fly.io
+### Live demo (Vercel)
+
+| Surface | URL |
+|---------|-----|
+| Dashboard | https://graphrag-plus-dashboard.vercel.app |
+| API | https://graphrag-plus-api.vercel.app (try [`/health`](https://graphrag-plus-api.vercel.app/health)) |
+
+The backend runs as a **Vercel Python serverless function** via
+[`api/index.py`](api/index.py): all writable paths are redirected to
+`/tmp` through `GRAPHRAG_*` env overrides, and the committed demo corpus
+is seeded on cold start so queries work immediately. Note that `/tmp` is
+ephemeral — corpora ingested on the demo survive only per serverless
+instance. For durable multi-user state, use a host with a persistent
+disk (below).
+
+To deploy your own copy:
+
+```bash
+vercel link --project my-graphrag-api && vercel deploy --prod   # repo root = backend
+cd frontend
+vercel link --project my-graphrag-dashboard
+vercel env add VITE_API_BASE production    # https://<your-api>.vercel.app
+vercel deploy --prod
+# then on the backend project:
+vercel env add GRAPHRAG_CORS_ORIGINS production   # https://<your-dashboard>.vercel.app
+vercel deploy --prod
+```
+
+### Backend — Render / Railway / Fly.io (persistent disk)
 
 Any of these PaaS hosts work. The repo's existing layout means the
 backend's working directory should be `graphrag_plus/` and the Python
