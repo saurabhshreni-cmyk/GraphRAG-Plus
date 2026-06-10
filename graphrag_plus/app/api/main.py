@@ -6,9 +6,9 @@ import os
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from graphrag_plus.app.config.settings import get_settings
 from graphrag_plus.app.evaluation.runner import evaluate_stub
@@ -50,6 +50,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a CORS-friendly JSON 500 for any unhandled error.
+
+    Starlette's default ServerErrorMiddleware sits *outside* CORSMiddleware,
+    so a bare unhandled exception yields a 500 with no ``Access-Control-
+    Allow-Origin`` header — browsers then surface an opaque "Failed to fetch"
+    instead of the real error. Registering this handler keeps the response
+    inside the CORS layer so the frontend can read and display the message.
+    """
+    pipeline.logger.exception("api.unhandled_error path=%s", request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal error: {type(exc).__name__}"},
+    )
 
 
 @app.get("/health", response_model=HealthResponse)
