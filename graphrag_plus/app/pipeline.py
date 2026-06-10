@@ -12,17 +12,24 @@ from graphrag_plus.app.analyst.engine import AnalystEngine
 from graphrag_plus.app.calibration.module import CalibrationModule
 from graphrag_plus.app.config.settings import Settings
 from graphrag_plus.app.contradiction.reasoner import ContradictionReasoner
+from graphrag_plus.app.corpus.manager import CorpusManager, derive_corpus_name
+from graphrag_plus.app.corpus.models import CorpusBundle
+from graphrag_plus.app.domain.detector import detect_domain
 from graphrag_plus.app.extraction.extractor import extract_from_chunks
 from graphrag_plus.app.failure.handler import FailureModeHandler
 from graphrag_plus.app.generation.generator import AnswerGenerator
 from graphrag_plus.app.generation.llm_clients import build_default_llm_client
 from graphrag_plus.app.gnn.scorer import GNNScorer
-from graphrag_plus.app.graph.store import GraphStore
 from graphrag_plus.app.graph.versioning.manager import GraphVersionManager
 from graphrag_plus.app.ingestion.chunker import chunk_documents
 from graphrag_plus.app.ingestion.loader import load_documents
+from graphrag_plus.app.planning.intent import (
+    QueryIntent,
+    adaptive_top_k,
+    comparison_terms,
+    detect_intent_signal,
+)
 from graphrag_plus.app.planning.query_planner import plan_query
-from graphrag_plus.app.retrieval.service import RetrievalService
 from graphrag_plus.app.schemas.models import (
     ContradictionItem,
     EvidenceItem,
@@ -46,9 +53,25 @@ class GraphRAGPipeline:
         self.settings = settings
         self.logger = get_logger(self.__class__.__name__)
         apply_global_seed(settings.random_seed)
-        self.graph_store = GraphStore(settings.graph_path)
+
+        # Multi-corpus support: each ingestion gets its own isolated bundle of
+        # (graph store + retrieval service + metadata). The "default" corpus
+        # below is created on demand to preserve backward compatibility for
+        # tests / ad-hoc usage that don't pass a corpus_id.
+        self.corpus_manager = CorpusManager(settings.corpora_dir)
+        # Keep the legacy single-graph attributes for tests that touch
+        # ``pipeline.graph_store`` / ``pipeline.retrieval`` directly. They
+        # point to a "default" corpus whose data is also under corpora_dir.
+        default = self.corpus_manager.get_active()
+        if default is None:
+            default = self.corpus_manager.create(
+                name="default", domain="general", source_urls=[], source_files=[]
+            )
+        self._default_corpus_id = default.meta.corpus_id
+        self.graph_store = default.graph_store
+        self.retrieval = default.retrieval
+
         self.version_manager = GraphVersionManager(settings.graph_versions_dir, settings.answers_log_path)
-        self.retrieval = RetrievalService(self.graph_store, settings.chunks_path)
         self.trust_manager = SourceTrustManager(
             settings.trust_state_path,
             settings.default_trust_prior,
@@ -100,19 +123,84 @@ class GraphRAGPipeline:
     def _ms_since(start: float) -> float:
         return round((time.perf_counter() - start) * 1000, 3)
 
+    # ------------------------------------------------------------ corpus utils
+    def _resolve_corpus(self, corpus_id: str | None) -> CorpusBundle:
+        """Pick the corpus bundle to operate on for a request.
+
+        Falls back to the active corpus when ``corpus_id`` is None — tests
+        and old API clients keep working without code changes.
+        """
+        if corpus_id:
+            return self.corpus_manager.get(corpus_id)
+        active = self.corpus_manager.get_active()
+        if active is None:  # pragma: no cover — bootstrap covers this
+            active = self.corpus_manager.create(
+                name="default", domain="general", source_urls=[], source_files=[]
+            )
+        return active
+
     # --------------------------------------------------------------- ingestion
-    def ingest(self, file_paths: list[str], urls: list[str]) -> IngestResponse:
-        """Ingest and index documents."""
+    def ingest(
+        self,
+        file_paths: list[str],
+        urls: list[str],
+        *,
+        corpus_id: str | None = None,
+        new_corpus: bool = True,
+        corpus_name: str | None = None,
+    ) -> IngestResponse:
+        """Ingest and index documents.
+
+        * ``new_corpus=True`` (default) creates a fresh isolated corpus per
+          ingestion call — this is the production path that prevents cross-
+          domain contamination.
+        * Pass an explicit ``corpus_id`` (and ``new_corpus=False``) to add
+          documents to an existing corpus.
+        * ``corpus_name`` overrides the auto-derived name for a new corpus.
+        """
         ingestion_start = time.perf_counter()
         timings: dict[str, float] = {}
+        ingest_warnings: list[str] = []
 
         load_start = time.perf_counter()
         documents = self._safe(
             "ingestion.load_documents",
-            lambda: load_documents(file_paths=file_paths, urls=urls),
+            lambda: load_documents(file_paths=file_paths, urls=urls, warnings=ingest_warnings),
             [],
         )
         timings["load_ms"] = self._ms_since(load_start)
+
+        # Decide which corpus this ingestion lands in.
+        bundle: CorpusBundle
+        if new_corpus and documents:
+            resolved_name = (corpus_name or "").strip() or derive_corpus_name(file_paths, urls)
+            corpus_text = " ".join(d.text for d in documents)
+            corpus_domain = detect_domain(corpus_text)
+            bundle = self.corpus_manager.create(
+                name=resolved_name,
+                domain=corpus_domain,
+                source_urls=list(urls),
+                source_files=list(file_paths),
+            )
+            self.logger.info(
+                "ingest.new_corpus id=%s name=%r domain=%s",
+                bundle.meta.corpus_id,
+                bundle.meta.name,
+                bundle.meta.domain,
+            )
+        else:
+            bundle = self._resolve_corpus(corpus_id)
+        # Refresh legacy attributes so existing code paths see this corpus.
+        self.graph_store = bundle.graph_store
+        self.retrieval = bundle.retrieval
+        # Log loaded documents for ingestion traceability.
+        for doc in documents:
+            self.logger.info(
+                "ingest.doc_loaded id=%s source=%s chars=%d",
+                doc.doc_id,
+                doc.source[:120],
+                len(doc.text),
+            )
 
         chunk_start = time.perf_counter()
         chunks = self._safe(
@@ -121,6 +209,10 @@ class GraphRAGPipeline:
             [],
         )
         timings["chunk_ms"] = self._ms_since(chunk_start)
+        # Log chunk count and a short sample for ingestion diagnostics.
+        self.logger.info("ingest.chunks count=%d", len(chunks))
+        if chunks:
+            self.logger.info("ingest.chunk_sample id=%s text=%r", chunks[0].chunk_id, chunks[0].text[:120])
 
         extract_start = time.perf_counter()
         entities, relations = self._safe(
@@ -129,6 +221,10 @@ class GraphRAGPipeline:
             ([], []),
         )
         timings["extract_ms"] = self._ms_since(extract_start)
+        # Log entity count and a few samples for extraction diagnostics.
+        self.logger.info("ingest.entities count=%d", len(entities))
+        for ent in entities[:5]:
+            self.logger.info("ingest.entity_sample text=%s type=%s", ent.text, ent.entity_type)
 
         contradictions: list[ContradictionItem] = []
         if self.settings.enable_contradiction:
@@ -185,12 +281,24 @@ class GraphRAGPipeline:
             },
         )
 
+        # Update corpus metadata with final counts.
+        self.corpus_manager.update_meta(
+            bundle.meta.corpus_id,
+            document_count=bundle.meta.document_count + len(documents),
+            chunk_count=bundle.meta.chunk_count + len(chunks),
+            entity_count=bundle.meta.entity_count + len(entities),
+        )
+
         return IngestResponse(
             documents=len(documents),
             chunks=len(chunks),
             entities=len(entities),
             relations=len(relations),
             graph_version_id=str(version_info.get("graph_version_id", "error")),
+            warnings=ingest_warnings,
+            corpus_id=bundle.meta.corpus_id,
+            corpus_name=bundle.meta.name,
+            corpus_domain=bundle.meta.domain,
         )
 
     def _record_contradictions(self, contradictions: list[ContradictionItem]) -> None:
@@ -214,7 +322,17 @@ class GraphRAGPipeline:
 
     # ------------------------------------------------------------------ query
     def query(self, request: QueryRequest) -> QueryResponse:
-        """Run planned retrieval and generation."""
+        """Run planned retrieval and generation against a specific corpus.
+
+        ``request.corpus_id`` selects which isolated corpus to query. When
+        omitted, falls through to the active corpus — preserves backward
+        compatibility for existing tests / API clients.
+        """
+        # Bind the right corpus's stores into ``self`` for the duration of
+        # this call so all the helpers below transparently use it.
+        bundle = self._resolve_corpus(getattr(request, "corpus_id", None))
+        self.graph_store = bundle.graph_store
+        self.retrieval = bundle.retrieval
         query_id = f"qry_{uuid.uuid4().hex[:12]}"
         started_at = utc_now_iso()
         query_start = time.perf_counter()
@@ -227,6 +345,22 @@ class GraphRAGPipeline:
 
         plan_start = time.perf_counter()
         plan = self._safe("planning.plan_query", lambda: plan_query(request.question), None)
+        # Intent detection drives adaptive retrieval + intent-aware generation.
+        intent_signal = self._safe(
+            "planning.detect_intent",
+            lambda: detect_intent_signal(request.question),
+            None,
+        )
+        intent: QueryIntent = intent_signal.intent if intent_signal else QueryIntent.FACTUAL
+        cmp_terms: tuple[str, str] | None = None
+        if intent == QueryIntent.COMPARISON:
+            cmp_terms = self._safe(
+                "planning.comparison_terms",
+                lambda: comparison_terms(request.question),
+                None,
+            )
+        # Adapt top_k: definition wants 2; list wants 5-8; explanation 5+.
+        effective_top_k = adaptive_top_k(intent, request.top_k)
         module_timings["planning_ms"] = self._ms_since(plan_start)
         _ = plan  # reserved for future routing policy
 
@@ -235,9 +369,34 @@ class GraphRAGPipeline:
         retrieval_start = time.perf_counter()
         candidates = self._safe(
             "retrieval.query",
-            lambda: self.retrieval.query(request.question, request.top_k, trust_lookup),
+            lambda: self.retrieval.query(
+                request.question,
+                effective_top_k,
+                trust_lookup,
+                intent=intent.value,
+                comparison_terms=cmp_terms,
+            ),
             [],
         )
+        # Fallback: if strict retrieval found nothing, try a loose pass that
+        # halves the relevance floor and skips the term-overlap gate. This
+        # only fires when the strict pass produced 0 candidates — a strong
+        # match still wins. NO_EVIDENCE classification still applies if even
+        # the loose pass returns nothing.
+        if not candidates:
+            self.logger.info("retrieval.fallback_loose question=%r", request.question[:80])
+            candidates = self._safe(
+                "retrieval.query.loose",
+                lambda: self.retrieval.query(
+                    request.question,
+                    effective_top_k,
+                    trust_lookup,
+                    intent=intent.value,
+                    comparison_terms=cmp_terms,
+                    loose=True,
+                ),
+                [],
+            )
         module_timings["retrieval_ms"] = self._ms_since(retrieval_start)
 
         if self.settings.use_gnn and candidates:
@@ -250,7 +409,7 @@ class GraphRAGPipeline:
         scored = self._safe("scoring.score_candidates", lambda: self.scoring.score_candidates(candidates), [])
         module_timings["scoring_ms"] = self._ms_since(scoring_start)
 
-        top = scored[: request.top_k] if scored else []
+        top = scored[:effective_top_k] if scored else []
         # Use the *pre-normalization* confidence so a strong single-doc match
         # doesn't get crushed to 0.5 by min-max scaling. Falls back to the
         # normalized value for older candidate rows that don't carry the raw
@@ -286,6 +445,8 @@ class GraphRAGPipeline:
                 [item.model_dump() for item in evidence_items],
                 calibrated_confidence,
                 self.settings.answer_threshold,
+                intent=intent.value,
+                comparison_terms=cmp_terms,
             ),
             ("I cannot answer reliably due to an internal error.", False, True),
         )
@@ -391,6 +552,10 @@ class GraphRAGPipeline:
             follow_up_questions=follow_ups,
             graph_version_id=graph_version_id,
             answer_state=answer_state,
+            query_intent=intent.value,
+            corpus_id=bundle.meta.corpus_id,
+            corpus_name=bundle.meta.name,
+            corpus_domain=bundle.meta.domain,
         )
 
         output_payload = {
@@ -450,6 +615,7 @@ class GraphRAGPipeline:
             id=item["id"],
             source_id=item["source_id"],
             snippet=item["snippet"],
+            full_text=item.get("full_text"),
             semantic_score=float(item["semantic_score"]),
             graph_score=float(item["graph_score"]),
             confidence_score=float(item["confidence_score"]),

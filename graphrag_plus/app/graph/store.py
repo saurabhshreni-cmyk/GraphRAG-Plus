@@ -10,6 +10,13 @@ from graphrag_plus.app.extraction.models import Entity, Relation
 from graphrag_plus.app.ingestion.models import Chunk, Document
 from graphrag_plus.app.utils.io_utils import dump_json, load_json
 
+# Co-occurrence edge controls for keeping dense concept graphs readable.
+# Pairs that co-occur in fewer than this many chunks are dropped. Each node
+# keeps at most this many strongest co-occurrence neighbours so high-degree
+# concepts ("network", "gradient") can't explode the graph.
+_MIN_CO_OCCUR_WEIGHT = 2
+_MAX_CO_EDGES_PER_NODE = 8
+
 
 class GraphStore:
     """Persistent heterogeneous graph."""
@@ -111,6 +118,50 @@ class GraphStore:
             )
             changed_nodes.extend([subj_id, obj_id])
             changed_edges.append(f"{subj_id}->{obj_id}:{edge_type}")
+
+        # ---- Co-occurrence edges -----------------------------------------
+        # Connect entity pairs that share chunks, but only when:
+        #   * weight (number of shared chunks) >= 2 — drops noise pairs that
+        #     happened to co-appear once,
+        #   * each node keeps at most ``_MAX_CO_EDGES_PER_NODE`` strongest
+        #     co-occurrence links (per-node edge cap).
+        per_chunk: dict[str, list[str]] = {}
+        for entity in entities:
+            ent_id = f"ent::{entity.text.lower()}"
+            per_chunk.setdefault(entity.source_chunk_id, []).append(ent_id)
+        co_pairs: dict[tuple[str, str], int] = {}
+        for ent_ids in per_chunk.values():
+            unique = sorted(set(ent_ids))
+            for i in range(len(unique)):
+                for j in range(i + 1, len(unique)):
+                    co_pairs[(unique[i], unique[j])] = co_pairs.get((unique[i], unique[j]), 0) + 1
+
+        # Drop weak pairs (weight < 2) — these are usually accidental
+        # co-mentions that don't reflect a real conceptual link.
+        strong_pairs = [(a, b, w) for (a, b), w in co_pairs.items() if w >= _MIN_CO_OCCUR_WEIGHT]
+        # Per-node edge cap: keep only the top-N strongest co-occur links
+        # incident to each node so high-degree concepts don't blow up.
+        strong_pairs.sort(key=lambda triple: triple[2], reverse=True)
+        per_node_count: dict[str, int] = {}
+        for a, b, w in strong_pairs:
+            if (
+                per_node_count.get(a, 0) >= _MAX_CO_EDGES_PER_NODE
+                or per_node_count.get(b, 0) >= _MAX_CO_EDGES_PER_NODE
+            ):
+                continue
+            self.graph.add_edge(
+                a,
+                b,
+                key="co_occurs",
+                edge_type="co_occurs",
+                predicate="co_occurs",
+                weight=w,
+                confidence=min(0.95, 0.5 + 0.1 * w),
+            )
+            changed_edges.append(f"{a}->{b}:co_occurs")
+            per_node_count[a] = per_node_count.get(a, 0) + 1
+            per_node_count[b] = per_node_count.get(b, 0) + 1
+
         self.save()
         return sorted(set(changed_nodes)), sorted(set(changed_edges))
 

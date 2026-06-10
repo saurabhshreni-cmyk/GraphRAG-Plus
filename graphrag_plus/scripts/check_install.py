@@ -21,10 +21,13 @@ REQUIRED_IMPORTS = [
     "numpy",
     "sklearn",
     "rank_bm25",
-    "torch",
     "pypdf",
     "httpx",
     "bs4",
+]
+
+OPTIONAL_IMPORTS = [
+    "torch",
 ]
 
 PROJECT_IMPORTS = [
@@ -50,6 +53,22 @@ def check_imports(modules: list[str]) -> None:
         except Exception as exc:
             fail(f"Import failed: {module} ({exc})")
     ok(f"Imports succeeded ({len(modules)} modules)")
+
+
+def check_optional_imports(modules: list[str]) -> None:
+    for module in modules:
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            print(f"[WARN] Optional import unavailable: {module} ({exc})")
+        else:
+            ok(f"Optional import available: {module}")
+
+
+def check_python_version() -> None:
+    if sys.version_info < (3, 11) or sys.version_info >= (3, 14):
+        fail("Python 3.11, 3.12, or 3.13 is required for local development.")
+    ok("Python version is supported")
 
 
 def check_cli_health() -> None:
@@ -91,7 +110,9 @@ def main() -> None:
     print(f"Python: {sys.version.split()[0]}")
     print(f"Executable: {sys.executable}")
 
+    check_python_version()
     check_imports(REQUIRED_IMPORTS)
+    check_optional_imports(OPTIONAL_IMPORTS)
     check_imports(PROJECT_IMPORTS)
     check_cli_health()
     ok("Installation check complete")

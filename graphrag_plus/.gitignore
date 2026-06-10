@@ -30,6 +30,7 @@ env/
 
 # Generated runtime data
 data/graph.json
+data/chunks.json
 data/graph_versions/
 data/trust_state.json
 data/calibration_state.json
@@ -38,6 +39,11 @@ data/answers_log.jsonl
 data/run_logs.jsonl
 data/outputs/
 data/reports/
+data/corpora/*
+!data/corpora/corpus_demo_nova/
+!data/corpora/corpus_demo_nova/meta.json
+!data/corpora/corpus_demo_nova/graph.json
+!data/corpora/corpus_demo_nova/chunks.json
 
 # OS
 .DS_Store
