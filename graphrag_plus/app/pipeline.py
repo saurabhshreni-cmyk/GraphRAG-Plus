@@ -129,9 +129,22 @@ class GraphRAGPipeline:
 
         Falls back to the active corpus when ``corpus_id`` is None — tests
         and old API clients keep working without code changes.
+
+        If an explicit ``corpus_id`` is given but unknown *on this process*
+        (e.g. a serverless instance whose ephemeral ``/tmp`` never saw that
+        ingest), we self-heal by falling back to the active/most-recent
+        corpus instead of raising — the response echoes the corpus actually
+        used so the client can re-sync. This keeps the public demo answering
+        rather than returning an uncatchable 500.
         """
         if corpus_id:
-            return self.corpus_manager.get(corpus_id)
+            try:
+                return self.corpus_manager.get(corpus_id)
+            except KeyError:
+                self.logger.warning(
+                    "corpus.unknown_id id=%s — falling back to active corpus",
+                    corpus_id,
+                )
         active = self.corpus_manager.get_active()
         if active is None:  # pragma: no cover — bootstrap covers this
             active = self.corpus_manager.create(

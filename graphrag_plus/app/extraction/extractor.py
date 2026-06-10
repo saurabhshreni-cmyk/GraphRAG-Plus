@@ -202,6 +202,19 @@ _STOPWORDS = frozenset(
     }
 )  # fmt: skip
 
+# Bare temporal tokens that are noise as standalone graph nodes. On
+# date-heavy text (e.g. encyclopedia articles) these would otherwise
+# litter the graph with "January", "Monday", "2024" nodes that carry no
+# entity meaning. They stay allowed inside multi-word phrases.
+_MONTHS = frozenset(
+    {
+        "january", "february", "march", "april", "may", "june", "july",
+        "august", "september", "october", "november", "december",
+    }
+)  # fmt: skip
+_WEEKDAYS = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+_TEMPORAL_WORDS = _MONTHS | _WEEKDAYS
+
 # Generic / vague nouns and verbs that shouldn't become standalone entities
 # even when they're capitalized at the start of a sentence ("System failed").
 # These are still allowed as PARTS of multi-word phrases when paired with a
@@ -307,6 +320,22 @@ def _is_meaningful(text: str) -> bool:
     return text.lower() not in _STOPWORDS
 
 
+def _is_temporal_noise(text: str) -> bool:
+    """True if ``text`` is a bare date/time token (month, weekday, year, number).
+
+    Multi-word phrases pass through so "Project Helios" or a genuine named
+    entity that merely contains a number survives; only standalone temporal
+    tokens like "January", "Monday", "2024", or "19" are rejected.
+    """
+    if " " in text or "-" in text:
+        return False
+    lowered = text.lower()
+    if lowered in _TEMPORAL_WORDS:
+        return True
+    # Pure numbers and bare 3-4 digit years.
+    return lowered.isdigit()
+
+
 def _is_generic_single_word(text: str) -> bool:
     """True if ``text`` is a single generic word that shouldn't stand alone.
 
@@ -341,6 +370,9 @@ def _add_entity(
         return
     # Drop generic single-word noise unless it's a known domain keyword.
     if _is_generic_single_word(text):
+        return
+    # Drop bare temporal tokens (months, weekdays, years, pure numbers).
+    if _is_temporal_noise(text):
         return
     text = _canonicalize(text)
     key = (text.lower(), chunk_id)

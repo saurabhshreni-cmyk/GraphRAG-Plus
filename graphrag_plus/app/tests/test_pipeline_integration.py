@@ -67,3 +67,18 @@ def test_ingest_derives_corpus_name_when_not_given(tmp_path: Path) -> None:
 
     assert ingest_res.corpus_name
     assert "quarterly" in ingest_res.corpus_name.lower()
+
+
+def test_query_with_unknown_corpus_id_self_heals(tmp_path: Path) -> None:
+    # Simulates a serverless instance that never saw the ingest that
+    # produced ``corpus_id`` (ephemeral /tmp). The query must NOT crash —
+    # it falls back to the active corpus and echoes the one actually used.
+    doc = tmp_path / "doc.txt"
+    doc.write_text("Nova Dynamics acquired Orion Labs on 2024-01-15.", encoding="utf-8")
+    pipeline = GraphRAGPipeline(_make_settings(tmp_path))
+    pipeline.ingest([str(doc)], [])
+
+    res = pipeline.query(QueryRequest(question="What did Nova Dynamics acquire?", corpus_id="corpus_ghost"))
+
+    assert res.answer  # answered rather than raised
+    assert res.corpus_id and res.corpus_id != "corpus_ghost"

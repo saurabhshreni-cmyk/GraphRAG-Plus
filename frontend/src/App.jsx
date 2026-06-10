@@ -65,18 +65,24 @@ export default function App() {
 
   const refreshCorpora = useCallback(async () => {
     try {
-      const list = await api.corpora();
-      setCorpora(list || []);
-      if (!activeCorpusId && list && list.length > 0) {
-        // Initial selection: pick the most recently created corpus that's
-        // backed by real data so we never default to the empty bootstrap one.
+      const list = (await api.corpora()) || [];
+      setCorpora(list);
+      // Reconcile the active selection against what the server actually has.
+      // On serverless, the previously-active corpus may live on a different
+      // ephemeral instance and be absent here — without this, the selector
+      // shows "(none)" and queries target a ghost corpus. Pick the most
+      // recent corpus backed by real data so we never default to empty.
+      setActiveCorpusId((current) => {
+        const stillPresent = current && list.some((c) => c.corpus_id === current);
+        if (stillPresent) return current;
+        if (list.length === 0) return null;
         const meaningful = list.find((c) => c.entity_count > 0) || list[0];
-        setActiveCorpusId(meaningful.corpus_id);
-      }
+        return meaningful.corpus_id;
+      });
     } catch (err) {
       console.warn("corpora fetch failed", err);
     }
-  }, [activeCorpusId]);
+  }, []);
 
   const handleSelectCorpus = useCallback(
     async (corpusId) => {
@@ -165,13 +171,20 @@ export default function App() {
           corpusId: activeCorpusId,
         });
         setResult(r);
+        // The backend may self-heal to a different corpus if ours wasn't
+        // present on the instance that served the request — adopt whatever
+        // it actually used so the UI and subsequent calls stay in sync.
+        if (r?.corpus_id && r.corpus_id !== activeCorpusId) {
+          setActiveCorpusId(r.corpus_id);
+          refreshCorpora();
+        }
       } catch (err) {
         toast.error(err.message || "Query failed");
       } finally {
         setBusy(false);
       }
     },
-    [llmMode, activeCorpusId],
+    [llmMode, activeCorpusId, refreshCorpora],
   );
 
   const steps = useMemo(() => buildStorySteps(result, snapshot), [result, snapshot]);
