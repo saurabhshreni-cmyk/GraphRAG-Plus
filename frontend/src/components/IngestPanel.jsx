@@ -16,6 +16,7 @@ import Spinner from "./Spinner.jsx";
 export default function IngestPanel({ onIngested, snapshot }) {
   const [filePathsRaw, setFilePathsRaw] = useState("");
   const [urlsRaw, setUrlsRaw] = useState("");
+  const [corpusName, setCorpusName] = useState("");
   const [busy, setBusy] = useState(false);
   const dropRef = useRef(null);
 
@@ -57,10 +58,15 @@ export default function IngestPanel({ onIngested, snapshot }) {
     }
     setBusy(true);
     try {
-      const result = await api.ingest({ filePaths, urls });
+      const result = await api.ingest({
+        filePaths,
+        urls,
+        corpusName: corpusName.trim() || null,
+      });
       toast.success(
         `Ingested ${result.documents} doc(s), ${result.entities} entities (this batch)`,
       );
+      setCorpusName("");
       onIngested?.(result);
     } catch (err) {
       toast.error(err.message || "Ingest failed");
@@ -114,6 +120,22 @@ export default function IngestPanel({ onIngested, snapshot }) {
         placeholder="https://example.com/page"
         className="thin-scroll w-full resize-y rounded-lg border border-white/5 bg-ink-900/40 px-3 py-2
                    font-mono text-xs text-ink-100 placeholder:text-ink-500
+                   focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30
+                   [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white
+                   [html:not(.dark)_&]:text-ink-900 [html:not(.dark)_&]:placeholder:text-ink-400"
+      />
+
+      <label className="mt-3 mb-2 block text-xs font-medium text-ink-300 [html:not(.dark)_&]:text-ink-600">
+        Corpus name <span className="text-ink-500">(optional)</span>
+      </label>
+      <input
+        type="text"
+        value={corpusName}
+        onChange={(e) => setCorpusName(e.target.value)}
+        maxLength={80}
+        placeholder="Auto-derived from first source when empty"
+        className="w-full rounded-lg border border-white/5 bg-ink-900/40 px-3 py-2
+                   text-xs text-ink-100 placeholder:text-ink-500
                    focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30
                    [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white
                    [html:not(.dark)_&]:text-ink-900 [html:not(.dark)_&]:placeholder:text-ink-400"

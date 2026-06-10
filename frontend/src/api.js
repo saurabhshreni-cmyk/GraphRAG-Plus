@@ -50,20 +50,59 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request("/health"),
-  ingest: ({ filePaths = [], urls = [] }) =>
-    request("/ingest", {
-      method: "POST",
-      body: JSON.stringify({ file_paths: filePaths, urls }),
-    }),
-  query: ({ question, analystMode = true, topK = 5, llmEnabled = null }) => {
+  ingest: ({
+    filePaths = [],
+    urls = [],
+    corpusId = null,
+    newCorpus = true,
+    corpusName = null,
+  }) => {
+    const body = {
+      file_paths: filePaths,
+      urls,
+      new_corpus: newCorpus,
+    };
+    if (corpusId) body.corpus_id = corpusId;
+    if (corpusName) body.corpus_name = corpusName;
+    return request("/ingest", { method: "POST", body: JSON.stringify(body) });
+  },
+  query: ({
+    question,
+    analystMode = true,
+    topK = 5,
+    llmEnabled = null,
+    corpusId = null,
+  }) => {
     const body = { question, top_k: topK, analyst_mode: analystMode };
     if (llmEnabled !== null) body.llm_enabled = llmEnabled;
+    if (corpusId) body.corpus_id = corpusId;
     return request("/query", {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
-  graph: (limit = 500) => request(`/graph?limit=${limit}`),
+  graph: ({
+    mode = "important",
+    limit = 60,
+    fullLimit = 500,
+    corpusId = null,
+  } = {}) => {
+    const params = new URLSearchParams({
+      mode,
+      limit: String(limit),
+      full_limit: String(fullLimit),
+    });
+    if (corpusId) params.set("corpus_id", corpusId);
+    return request(`/graph?${params.toString()}`);
+  },
+  corpora: () => request("/corpora"),
+  activeCorpus: () => request("/corpora/active"),
+  selectCorpus: (corpusId) =>
+    request(`/corpora/${encodeURIComponent(corpusId)}/select`, {
+      method: "POST",
+    }),
+  deleteCorpus: (corpusId) =>
+    request(`/corpora/${encodeURIComponent(corpusId)}`, { method: "DELETE" }),
 };
 
 export { BASE as API_BASE, ApiError };

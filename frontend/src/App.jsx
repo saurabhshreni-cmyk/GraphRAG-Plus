@@ -5,6 +5,7 @@ import IngestPanel from "./components/IngestPanel.jsx";
 import QueryBox from "./components/QueryBox.jsx";
 import ResultCard from "./components/ResultCard.jsx";
 import GraphView from "./components/GraphView.jsx";
+import CorpusSelector from "./components/CorpusSelector.jsx";
 import ReasoningStory, { buildStorySteps } from "./components/ReasoningStory.jsx";
 import { api } from "./api.js";
 
@@ -29,6 +30,12 @@ export default function App() {
   const [storyOn, setStoryOn] = useState(true);
   const [storyHighlights, setStoryHighlights] = useState([]);
   const [evidenceHighlights, setEvidenceHighlights] = useState([]);
+  // "important" caps to top-N nodes by degree; "full" returns the entire graph.
+  const [graphMode, setGraphMode] = useState("important");
+  // Corpus isolation: list of all corpora + the active one. Each ingestion
+  // creates a new isolated corpus; queries operate on the active one.
+  const [corpora, setCorpora] = useState([]);
+  const [activeCorpusId, setActiveCorpusId] = useState(null);
 
   // Apply theme to <html> and persist.
   useEffect(() => {
@@ -44,13 +51,59 @@ export default function App() {
 
   const refreshGraph = useCallback(async () => {
     try {
-      const snap = await api.graph(500);
+      const snap = await api.graph({
+        mode: graphMode,
+        limit: 60,
+        corpusId: activeCorpusId,
+      });
       setSnapshot(snap);
     } catch (err) {
       // Non-fatal — graph viz just stays empty.
       console.warn("graph fetch failed", err);
     }
-  }, []);
+  }, [graphMode, activeCorpusId]);
+
+  const refreshCorpora = useCallback(async () => {
+    try {
+      const list = await api.corpora();
+      setCorpora(list || []);
+      if (!activeCorpusId && list && list.length > 0) {
+        // Initial selection: pick the most recently created corpus that's
+        // backed by real data so we never default to the empty bootstrap one.
+        const meaningful = list.find((c) => c.entity_count > 0) || list[0];
+        setActiveCorpusId(meaningful.corpus_id);
+      }
+    } catch (err) {
+      console.warn("corpora fetch failed", err);
+    }
+  }, [activeCorpusId]);
+
+  const handleSelectCorpus = useCallback(
+    async (corpusId) => {
+      try {
+        await api.selectCorpus(corpusId);
+        setActiveCorpusId(corpusId);
+        toast.success("Corpus switched");
+      } catch (err) {
+        toast.error(`Could not switch corpus: ${err.message}`);
+      }
+    },
+    [],
+  );
+
+  const handleDeleteCorpus = useCallback(
+    async (corpusId) => {
+      try {
+        await api.deleteCorpus(corpusId);
+        toast.success("Corpus deleted");
+        if (corpusId === activeCorpusId) setActiveCorpusId(null);
+        await refreshCorpora();
+      } catch (err) {
+        toast.error(`Delete failed: ${err.message}`);
+      }
+    },
+    [activeCorpusId, refreshCorpora],
+  );
 
   // Initial health + graph fetch + periodic re-poll so the badge stays honest.
   useEffect(() => {
@@ -67,18 +120,35 @@ export default function App() {
     };
     (async () => {
       await checkHealth();
-      if (!cancelled) refreshGraph();
+      if (!cancelled) {
+        await refreshCorpora();
+        refreshGraph();
+      }
     })();
     const interval = setInterval(checkHealth, 30_000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [refreshGraph]);
+  }, [refreshGraph, refreshCorpora]);
 
-  const handleIngested = useCallback(() => {
-    refreshGraph();
-  }, [refreshGraph]);
+  // Refresh graph whenever active corpus changes so the viz reflects the
+  // currently selected isolated graph (no cross-corpus mixing).
+  useEffect(() => {
+    if (activeCorpusId) refreshGraph();
+  }, [activeCorpusId, refreshGraph]);
+
+  const handleIngested = useCallback(
+    (response) => {
+      // Each ingest creates a new isolated corpus by default. Switch to it.
+      if (response?.corpus_id) {
+        setActiveCorpusId(response.corpus_id);
+      }
+      refreshCorpora();
+      refreshGraph();
+    },
+    [refreshCorpora, refreshGraph],
+  );
 
   const handleAsk = useCallback(
     async (question) => {
@@ -88,7 +158,12 @@ export default function App() {
       try {
         const llmEnabled =
           llmMode === "llm" ? true : llmMode === "extractive" ? false : null;
-        const r = await api.query({ question, analystMode: true, llmEnabled });
+        const r = await api.query({
+          question,
+          analystMode: true,
+          llmEnabled,
+          corpusId: activeCorpusId,
+        });
         setResult(r);
       } catch (err) {
         toast.error(err.message || "Query failed");
@@ -96,7 +171,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [llmMode],
+    [llmMode, activeCorpusId],
   );
 
   const steps = useMemo(() => buildStorySteps(result, snapshot), [result, snapshot]);
@@ -112,6 +187,24 @@ export default function App() {
         theme={theme}
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
       />
+
+      <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 pt-4 sm:px-6">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] uppercase tracking-wider text-ink-400 [html:not(.dark)_&]:text-ink-500">
+            Active workspace
+          </span>
+          <CorpusSelector
+            corpora={corpora}
+            activeCorpusId={activeCorpusId}
+            onSelect={handleSelectCorpus}
+            onRefresh={refreshCorpora}
+            onDelete={handleDeleteCorpus}
+          />
+        </div>
+        <span className="text-[10px] text-ink-500/80 [html:not(.dark)_&]:text-ink-400">
+          {corpora.length} corpus{corpora.length === 1 ? "" : "es"} · isolated
+        </span>
+      </div>
 
       <main className="mx-auto grid max-w-[1600px] gap-5 px-4 py-6 sm:px-6 md:grid-cols-2 lg:grid-cols-12">
         {/* LEFT PANEL: ingest + reasoning story */}
@@ -138,6 +231,8 @@ export default function App() {
             snapshot={snapshot}
             highlights={activeHighlights}
             theme={theme}
+            mode={graphMode}
+            onModeChange={setGraphMode}
           />
         </div>
 
