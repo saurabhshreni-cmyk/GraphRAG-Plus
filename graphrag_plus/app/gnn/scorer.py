@@ -7,14 +7,16 @@ pipeline degrades gracefully on lightweight installs.
 
 from __future__ import annotations
 
+from typing import Any
+
 try:  # Optional dependency
     import torch
     from torch import nn
 
     _TORCH_AVAILABLE = True
 except Exception:
-    torch = None  # type: ignore[assignment]
-    nn = None  # type: ignore[assignment]
+    torch = None  # type: ignore[assignment, unused-ignore]
+    nn = None  # type: ignore[assignment, unused-ignore]
     _TORCH_AVAILABLE = False
 
 
@@ -27,7 +29,7 @@ def _features(candidate: dict[str, float]) -> list[float]:
 
 if _TORCH_AVAILABLE:
 
-    class TinyGraphScorer(nn.Module):  # type: ignore[misc]
+    class TinyGraphScorer(nn.Module):  # type: ignore[misc, unused-ignore]
         """Simple MLP scorer over candidate features."""
 
         def __init__(self) -> None:
@@ -39,7 +41,7 @@ if _TORCH_AVAILABLE:
                 nn.Sigmoid(),
             )
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
+        def forward(self, x: Any) -> Any:
             return self.net(x)
 
 

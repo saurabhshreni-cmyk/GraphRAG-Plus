@@ -1,0 +1,133 @@
+{
+  "nodes": [
+    {
+      "id": "doc_sample1",
+      "node_type": "Document",
+      "source": "graphrag_plus/data/sample_docs/sample1.txt"
+    },
+    {
+      "id": "doc_sample2",
+      "node_type": "Document",
+      "source": "graphrag_plus/data/sample_docs/sample2.txt"
+    },
+    {
+      "id": "doc_sample1_ch_0",
+      "node_type": "Chunk",
+      "doc_id": "doc_sample1",
+      "timestamp": "2024-01-15"
+    },
+    {
+      "id": "doc_sample2_ch_0",
+      "node_type": "Chunk",
+      "doc_id": "doc_sample2",
+      "timestamp": "2024-02-10"
+    },
+    {
+      "id": "ent::nova dynamics",
+      "node_type": "Entity",
+      "label": "Nova Dynamics"
+    },
+    {
+      "id": "ent::orion labs",
+      "node_type": "Entity",
+      "label": "Orion Labs"
+    },
+    {
+      "id": "ent::project helios",
+      "node_type": "Entity",
+      "label": "Project Helios"
+    },
+    {
+      "id": "ent::analyst brief",
+      "node_type": "Source",
+      "label": "Analyst Brief"
+    },
+    {
+      "id": "ent::report delta",
+      "node_type": "Source",
+      "label": "Report Delta"
+    }
+  ],
+  "edges": [
+    {
+      "source": "doc_sample1",
+      "target": "doc_sample1_ch_0",
+      "key": "contains",
+      "edge_type": "contains"
+    },
+    {
+      "source": "doc_sample2",
+      "target": "doc_sample2_ch_0",
+      "key": "contains",
+      "edge_type": "contains"
+    },
+    {
+      "source": "doc_sample1_ch_0",
+      "target": "ent::nova dynamics",
+      "key": "mentions",
+      "edge_type": "mentions",
+      "confidence": 0.9
+    },
+    {
+      "source": "doc_sample1_ch_0",
+      "target": "ent::orion labs",
+      "key": "mentions",
+      "edge_type": "mentions",
+      "confidence": 0.9
+    },
+    {
+      "source": "doc_sample2_ch_0",
+      "target": "ent::project helios",
+      "key": "mentions",
+      "edge_type": "mentions",
+      "confidence": 0.9
+    },
+    {
+      "source": "doc_sample2_ch_0",
+      "target": "ent::report delta",
+      "key": "mentions",
+      "edge_type": "mentions",
+      "confidence": 0.9
+    },
+    {
+      "source": "ent::nova dynamics",
+      "target": "ent::orion labs",
+      "key": "acquired@doc_sample1_ch_0",
+      "edge_type": "acquired",
+      "predicate": "acquired",
+      "confidence": 0.92,
+      "source_chunk_id": "doc_sample1_ch_0",
+      "timestamp": "2024-01-15"
+    },
+    {
+      "source": "ent::analyst brief",
+      "target": "ent::orion labs",
+      "key": "supports@doc_sample1_ch_0",
+      "edge_type": "supports",
+      "predicate": "supports",
+      "confidence": 0.86,
+      "source_chunk_id": "doc_sample1_ch_0",
+      "timestamp": "2024-01-15"
+    },
+    {
+      "source": "ent::report delta",
+      "target": "ent::project helios",
+      "key": "contradicts@doc_sample2_ch_0",
+      "edge_type": "contradicts",
+      "predicate": "contradicts",
+      "confidence": 0.84,
+      "source_chunk_id": "doc_sample2_ch_0",
+      "timestamp": "2024-02-10"
+    },
+    {
+      "source": "ent::nova dynamics",
+      "target": "ent::project helios",
+      "key": "supports@doc_sample2_ch_0",
+      "edge_type": "supports",
+      "predicate": "supports",
+      "confidence": 0.78,
+      "source_chunk_id": "doc_sample2_ch_0",
+      "timestamp": "2024-02-10"
+    }
+  ]
+}

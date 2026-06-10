@@ -61,6 +61,31 @@ def _tokenize(text: str) -> list[str]:
     return [tok for tok in tokens if tok not in _STOPWORDS and len(tok) > 1]
 
 
+# Patterns that suggest a chunk contains an enumeration. Used for LIST-intent
+# boosting only — never for gating.
+_LIST_MARKER_RE = re.compile(
+    r"(?:"
+    r"\b(?:types?|kinds?|examples?|methods?|categories|forms?|varieties|classes|approaches|styles)\s+(?:of|include|are)\b|"
+    r"\bsuch\s+as\b|"
+    r"\bfollowing\s+(?:types|kinds|examples|methods)\b|"
+    r"\bincludes?\s+the\s+following\b"
+    r")",
+    re.IGNORECASE,
+)
+_BULLET_LINE_RE = re.compile(r"(?m)^\s*(?:[-*•·]|\d+[.)]|[a-z][.)])\s+\S")
+
+
+def _has_list_markers(text_lower: str) -> bool:
+    """True if ``text_lower`` looks like it enumerates things.
+
+    Triggers on either lexical cues ("types of", "such as") or visible
+    bullet/numbered lines. Cheap regex check — runs once per chunk.
+    """
+    if _LIST_MARKER_RE.search(text_lower):
+        return True
+    return bool(_BULLET_LINE_RE.search(text_lower))
+
+
 @dataclass
 class RetrievalCandidate:
     """Candidate from retrieval stack."""
@@ -151,16 +176,32 @@ class RetrievalService:
             merged[chunk.chunk_id] = chunk
         self._build(list(merged.values()), persist=True)
 
-    def query(self, question: str, top_k: int, trust_lookup: dict[str, float]) -> list[dict[str, float]]:
+    def query(
+        self,
+        question: str,
+        top_k: int,
+        trust_lookup: dict[str, float],
+        *,
+        intent: str | None = None,
+        comparison_terms: tuple[str, str] | None = None,
+        loose: bool = False,
+    ) -> list[dict[str, float]]:
         """Retrieve candidates with base scores.
 
         Pipeline:
             1. Score every chunk on cosine + BM25 + graph hits.
-            2. Reject chunks that share no query term and have weak cosine
-               (term-overlap gate).
-            3. Reject chunks below the relevance floor (combined OR cosine).
-            4. Sort by blended score and return top-k * 3.
-            5. Log every decision so retrieval quality is debuggable.
+            2. Apply intent-aware boosts:
+               * ``list``       — boost chunks containing list markers
+                 (``"types of"``, bullets, numbered lines).
+               * ``comparison`` — require BOTH compared terms to appear,
+                 unless cosine is strong enough to trust semantic match.
+            3. Reject chunks that share no query term and have weak cosine.
+            4. Reject chunks below the relevance floor.
+            5. Sort by blended score and return top-k * 3.
+
+        ``loose`` relaxes the relevance floor by 50% and skips the
+        term-overlap gate — used as a last-resort fallback retrieval pass
+        from the pipeline when strict mode returned nothing.
         """
         if not self.chunks or self.chunk_matrix is None or self.bm25 is None:
             log_event(
@@ -177,12 +218,22 @@ class RetrievalService:
         bm25_scores = np.array(self.bm25.get_scores(question_tokens))
         graph_hits = self._graph_hit_scores(question)
 
-        # Clamp negative BM25 (rank-bm25 returns negatives on tiny corpora)
-        # and normalize against the corpus max so the lexical signal sits
-        # in roughly the same range as cosine.
+        # Clamp negative BM25 and normalize against corpus max.
         bm25_scores = np.clip(bm25_scores, 0.0, None)
         bm25_max = float(bm25_scores.max()) if bm25_scores.size else 0.0
         bm25_norm = bm25_scores / bm25_max if bm25_max > 0 else bm25_scores
+
+        # Pre-compute lowered comparison terms for the comparison gate.
+        cmp_a, cmp_b = (None, None)
+        if intent == "comparison" and comparison_terms is not None:
+            cmp_a, cmp_b = (
+                comparison_terms[0].lower().strip(),
+                comparison_terms[1].lower().strip(),
+            )
+
+        # Loose-mode floors for the fallback pass.
+        min_blend = _MIN_BLEND * (0.5 if loose else 1.0)
+        min_cosine = _MIN_COSINE * (0.5 if loose else 1.0)
 
         rows: list[dict[str, float]] = []
         rejected: list[dict[str, object]] = []
@@ -191,40 +242,56 @@ class RetrievalService:
             semantic_cos = float(cosine[idx])
             keyword = float(bm25_norm[idx])
             graph_score = graph_hits.get(chunk.chunk_id, 0.0)
-            # Weighted blend favouring cosine, with BM25 as a secondary
-            # signal. Stays roughly in [0, 1].
             blended = _W_COSINE * semantic_cos + _W_BM25 * keyword
 
-            # Term-overlap gate: at least one non-stopword query token must
-            # appear in this chunk, OR cosine must be strong enough that we
-            # trust the semantic match even without lexical overlap.
+            chunk_text_lower = (chunk.text or "").lower()
+
+            # ---- Intent-aware boosts (additive, not gating) ---------------
+            list_bonus = 0.0
+            if intent == "list" and _has_list_markers(chunk_text_lower):
+                list_bonus = 0.10
+                blended += list_bonus
+
+            # ---- Comparison gate -----------------------------------------
+            comparison_pass = True
+            if cmp_a and cmp_b:
+                has_a = cmp_a in chunk_text_lower
+                has_b = cmp_b in chunk_text_lower
+                # Pass if BOTH terms present, OR cosine strong (semantic match).
+                comparison_pass = (has_a and has_b) or semantic_cos >= _STRONG_COSINE
+
             chunk_tokens = self._tokenized[idx] if idx < len(self._tokenized) else _tokenize(chunk.text)
             shares_term = bool(question_token_set.intersection(chunk_tokens))
             cosine_strong = semantic_cos >= _STRONG_COSINE
 
-            # Relevance gate: the blend OR cosine must clear the threshold,
-            # OR the graph picked up an entity-level match.
-            blend_strong = blended >= _MIN_BLEND
-            cos_above_floor = semantic_cos >= _MIN_COSINE
+            blend_strong = blended >= min_blend
+            cos_above_floor = semantic_cos >= min_cosine
             graph_strong = graph_score > 0
 
             base_row = {
                 "id": chunk.chunk_id,
                 "source_id": source_id,
+                # Preserve the full chunk text so the generator can extract
+                # complete sentences instead of snippet-boundary fragments.
+                # The 300-char ``snippet`` field stays for legacy callers /
+                # API responses that don't want the full payload.
                 "snippet": chunk.text[:300],
+                "full_text": chunk.text,
                 "semantic_score": blended,
                 "graph_score": graph_score,
                 "confidence_score": 0.5 + min(0.5, max(0.0, blended)),
                 "trust_score": trust_lookup.get(source_id, 0.5),
                 "uncertainty_penalty": safe_entropy(0.5 + min(0.5, max(0.0, blended))),
-                # Preserve raw signals so downstream normalization doesn't
-                # erase absolute scale.
                 "raw_relevance": blended,
                 "raw_cosine": semantic_cos,
                 "raw_bm25": keyword,
+                "list_bonus": list_bonus,
             }
 
-            if not (shares_term or cosine_strong):
+            if not comparison_pass:
+                rejected.append({**base_row, "reason": "missing_comparison_term"})
+                continue
+            if not loose and not (shares_term or cosine_strong):
                 rejected.append({**base_row, "reason": "no_term_overlap"})
                 continue
             if not (blend_strong or cos_above_floor or graph_strong):

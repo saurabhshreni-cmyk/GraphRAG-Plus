@@ -111,7 +111,9 @@ per-stage latency histograms.
 
 ## Installation
 
-GraphRAG++ requires **Python 3.11+**. Heavy dependencies (PyTorch,
+GraphRAG++ supports **Python 3.11, 3.12, and 3.13**. Python 3.14 is not
+targeted yet because several scientific Python dependencies are still
+catching up. Heavy dependencies (PyTorch,
 sentence-transformers, FAISS, etc.) are **opt-in** so the base install
 stays lightweight (~150 MB).
 
@@ -134,7 +136,7 @@ python -m pip install -e .[extras]    # + neo4j, chromadb, spacy
 
 Optional modules **degrade gracefully**: the GNN reranker uses a
 deterministic linear blend when torch is missing, and `/metrics` returns
-a stub when `prometheus-client` is absent.
+a lightweight fallback when `prometheus-client` is absent.
 
 ---
 
@@ -153,7 +155,7 @@ python -m graphrag_plus.app.cli query \
   --question "Which source contradicts the cancellation claim?" \
   --analyst-mode
 
-# Run the benchmark stub
+# Run the lightweight benchmark
 python -m graphrag_plus.app.cli evaluate
 
 # Run the ablation matrix
@@ -169,12 +171,21 @@ uvicorn graphrag_plus.app.api.main:app --reload
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET`  | `/health`           | Liveness + capability info |
-| `POST` | `/ingest`           | Ingest local files and/or URLs |
-| `POST` | `/query`            | Hybrid retrieval + answer generation |
-| `GET`  | `/graph`            | Full graph snapshot (nodes + edges) for visualization |
+| `POST` | `/ingest`           | Ingest files/URLs into a new or existing corpus (optional `corpus_name`) |
+| `POST` | `/query`            | Hybrid retrieval + answer generation (optional `corpus_id`) |
+| `GET`  | `/corpora`          | List all corpora (newest first) |
+| `GET`  | `/corpora/active`   | Currently active corpus |
+| `POST` | `/corpora/{id}/select` | Switch the active corpus |
+| `DELETE` | `/corpora/{id}`   | Permanently delete a corpus |
+| `GET`  | `/graph`            | Graph snapshot (nodes + edges) for visualization |
 | `GET`  | `/graph/{node_id}`  | Neighborhood for a graph node |
-| `GET`  | `/evaluate`         | Run the benchmark stub |
+| `GET`  | `/evaluate`         | Run the lightweight benchmark |
 | `GET`  | `/metrics`          | Prometheus exposition |
+
+Each ingest call creates an **isolated corpus** by default (preventing
+cross-domain contamination); the corpus's domain is auto-detected from
+its text (machine learning, physics, finance, biology, chemistry,
+mathematics, computer science, or general).
 
 CORS origins are controlled by `GRAPHRAG_CORS_ORIGINS` (comma-separated).
 Defaults cover the local Vite dev servers (`http://localhost:5173`,
@@ -265,6 +276,20 @@ npm run preview            # http://localhost:4173
 
 See [`frontend/README.md`](frontend/README.md) for full notes.
 
+### Resume demo dataset
+
+The repo includes a small curated local demo corpus at
+`graphrag_plus/data/corpora/corpus_demo_nova/`, generated from the sample
+documents in `graphrag_plus/data/sample_docs/`. It gives the dashboard an
+immediate graph to render after startup while keeping generated logs,
+query outputs, and scratch corpora out of version control.
+
+Good local demo questions:
+
+- `Which source contradicts the cancellation claim?`
+- `What did Nova Dynamics acquire?`
+- `How are Orion Labs and Project Helios connected?`
+
 ---
 
 ## Deployment
@@ -338,6 +363,8 @@ GraphRAG-Plus/
     │   ├── extraction/         ← entity / relation extraction
     │   ├── contradiction/      ← (subject, predicate) disagreement detection
     │   ├── graph/              ← NetworkX store + versioning manager
+    │   ├── corpus/             ← multi-corpus manager (isolated graphs + indexes)
+    │   ├── domain/             ← keyword-frequency domain classifier
     │   ├── retrieval/          ← vector + BM25 + graph expansion
     │   ├── scoring/            ← weighted score blend
     │   ├── gnn/                ← optional torch reranker (with fallback)
@@ -347,10 +374,10 @@ GraphRAG-Plus/
     │   ├── active_learning/    ← review queue for low-confidence/conflict
     │   ├── analyst/            ← analyst-mode reasoning + follow-ups
     │   ├── evaluation/         ← benchmark + ablation runners
-    │   ├── planning/           ← query planner stub
+    │   ├── planning/           ← query intent heuristics
     │   ├── schemas/            ← Pydantic request/response models
     │   ├── utils/              ← logging, IO, metrics, run logger, runtime
-    │   └── tests/              ← pytest suite (21 tests)
+    │   └── tests/              ← pytest suite (66 tests)
     ├── data/
     │   └── sample_docs/        ← shipped samples for the quickstart
     ├── scripts/                ← PowerShell helpers (demo, run_api, etc.)
@@ -361,7 +388,7 @@ GraphRAG-Plus/
 
 ## Tech stack
 
-- **Python 3.11+**
+- **Python 3.11, 3.12, or 3.13**
 - **FastAPI** + **Uvicorn** — REST surface
 - **Pydantic v2** — request/response models, settings
 - **NetworkX** — in-memory graph store
@@ -431,6 +458,30 @@ pytest --cov=app --cov-report=term-missing
 
 CI runs on every push / PR (Python 3.11 & 3.12) — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+### Local pre-trust gate
+
+On Windows, run the local quality gate from the repository root before
+trusting answer-quality changes or demoing the app:
+
+```powershell
+.\graphrag_plus\scripts\quality_gate.ps1
+```
+
+The gate sets `PYTHONPATH`, applies safe Python autofixes (`ruff --fix`
+and `black`) only when run with `-Fix`. By default it is verify-only: it
+runs the install check, `ruff`, `black --check`, `mypy`, and the backend
+pytest suite, then builds the frontend. It does not start, stop, ingest,
+reset, or mutate runtime graph data. Pass `-ProbeHealth` when you already
+have the backend running and want the gate to check `127.0.0.1:8765/health`.
+
+```powershell
+# Optional: allow the gate to format/fix before verification
+.\graphrag_plus\scripts\quality_gate.ps1 -Fix
+
+# Optional: include a live backend health probe
+.\graphrag_plus\scripts\quality_gate.ps1 -ProbeHealth
+```
 
 ---
 

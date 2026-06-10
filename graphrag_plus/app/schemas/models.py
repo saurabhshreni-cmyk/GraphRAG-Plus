@@ -24,6 +24,13 @@ class IngestRequest(BaseModel):
 
     file_paths: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
+    # Pass an existing ``corpus_id`` + ``new_corpus=False`` to add to that
+    # corpus. Omit both to create a fresh corpus per call (default).
+    corpus_id: str | None = None
+    new_corpus: bool = True
+    # Optional explicit display name for a new corpus; auto-derived from the
+    # first source (file stem / URL slug) when omitted.
+    corpus_name: str | None = None
 
 
 class IngestResponse(BaseModel):
@@ -34,6 +41,24 @@ class IngestResponse(BaseModel):
     entities: int
     relations: int
     graph_version_id: str
+    warnings: list[str] = Field(default_factory=list)
+    corpus_id: str | None = None
+    corpus_name: str | None = None
+    corpus_domain: str | None = None
+
+
+class CorpusInfo(BaseModel):
+    """Public-facing corpus metadata for the UI selector."""
+
+    corpus_id: str
+    name: str
+    domain: str
+    source_urls: list[str] = Field(default_factory=list)
+    source_files: list[str] = Field(default_factory=list)
+    created_at: str = ""
+    document_count: int = 0
+    chunk_count: int = 0
+    entity_count: int = 0
 
 
 class QueryRequest(BaseModel):
@@ -49,6 +74,9 @@ class QueryRequest(BaseModel):
     # forces the strategy for this query only. Keeps trust-aware gating
     # intact: ``NO_EVIDENCE`` still skips the LLM regardless of this flag.
     llm_enabled: bool | None = None
+    # Which isolated corpus to query. ``None`` means "use the active corpus"
+    # (preserves backward compatibility for tests + simple API usage).
+    corpus_id: str | None = None
 
 
 class EvidenceItem(BaseModel):
@@ -57,6 +85,9 @@ class EvidenceItem(BaseModel):
     id: str
     source_id: str
     snippet: str
+    # Full chunk text so the generator can extract complete sentences. The
+    # 300-char ``snippet`` is kept for legacy clients + analytics views.
+    full_text: str | None = None
     semantic_score: float
     graph_score: float
     confidence_score: float
@@ -97,6 +128,13 @@ class QueryResponse(BaseModel):
     graph_version_id: str | None = None
     answer_state: str = "updated"
     output_path: str | None = None
+    # Detected query intent (definition / list / comparison / explanation /
+    # factual). Drives intent-aware retrieval + extractive generation paths.
+    query_intent: str | None = None
+    # Which corpus the answer came from (helps the UI label results).
+    corpus_id: str | None = None
+    corpus_name: str | None = None
+    corpus_domain: str | None = None
 
 
 class GraphResponse(BaseModel):

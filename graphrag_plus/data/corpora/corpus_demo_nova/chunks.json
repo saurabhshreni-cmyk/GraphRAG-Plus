@@ -1,0 +1,18 @@
+[
+  {
+    "chunk_id": "doc_sample1_ch_0",
+    "doc_id": "doc_sample1",
+    "text": "On 2024-01-15, Nova Dynamics acquired Orion Labs. Analyst Brief supports the claim that Orion Labs merged into Nova Dynamics. The strategic alliance precedes the merger event.",
+    "start": 0,
+    "end": 168,
+    "timestamp": "2024-01-15"
+  },
+  {
+    "chunk_id": "doc_sample2_ch_0",
+    "doc_id": "doc_sample2",
+    "text": "On 2024-02-10, another source contradicts the claim that Project Helios was canceled. Report Delta supports continuation under Phase II. Nova Dynamics supports Orion Labs integration roadmap.",
+    "start": 0,
+    "end": 184,
+    "timestamp": "2024-02-10"
+  }
+]
