@@ -1,0 +1,29 @@
+# Keep the backend serverless bundle small — only the Python package,
+# the demo corpus, and the api/ entrypoint are needed.
+frontend
+_demo
+graphify-out
+.github
+.claude
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+graphrag_plus/graphify-out
+graphrag_plus/app/tests
+graphrag_plus/scripts
+graphrag_plus/examples
+graphrag_plus/graphrag_plus.egg-info
+LICENSE
+README.md
+
+# Local runtime state — only the committed demo corpus ships.
+graphrag_plus/.cache
+graphrag_plus/data/outputs
+graphrag_plus/data/reports
+graphrag_plus/data/graph_versions
+graphrag_plus/data/*.json
+graphrag_plus/data/*.jsonl
+graphrag_plus/data/corpora/*
+!graphrag_plus/data/corpora/corpus_demo_nova
+graphrag_plus/.tmp

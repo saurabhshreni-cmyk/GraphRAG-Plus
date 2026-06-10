@@ -1,0 +1,15 @@
+# Serverless deployment requirements (Vercel Python runtime).
+# Mirrors the core dependencies in graphrag_plus/pyproject.toml minus
+# uvicorn (the platform provides the ASGI server).
+fastapi>=0.111.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.1
+networkx>=3.2.1
+numpy>=1.26.4
+scikit-learn>=1.4.2
+rank-bm25>=0.2.2
+python-dateutil>=2.9.0.post0
+pypdf>=4.2.0
+httpx>=0.27.0
+beautifulsoup4>=4.12.3
+prometheus-client>=0.20.0
