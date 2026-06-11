@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from graphrag_plus.app.config.settings import get_settings
+from graphrag_plus.app.corpus.blob_store import make_blob_store
+from graphrag_plus.app.corpus.seed import seed_demo_corpus
 from graphrag_plus.app.evaluation.runner import evaluate_stub
 from graphrag_plus.app.pipeline import GraphRAGPipeline
 from graphrag_plus.app.schemas.models import (
@@ -26,6 +28,10 @@ from graphrag_plus.app.schemas.models import (
 from graphrag_plus.app.utils.metrics import METRICS
 
 settings = get_settings()
+# Seed the demo corpus into the active backend before the pipeline scans it.
+# Idempotent: Postgres keeps it across instances; a fresh /tmp or local dir
+# gets it on first boot.
+seed_demo_corpus(settings.corpora_dir, make_blob_store(settings.database_url))
 pipeline = GraphRAGPipeline(settings)
 app = FastAPI(title="GraphRAG++")
 

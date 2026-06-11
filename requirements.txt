@@ -13,3 +13,6 @@ pypdf>=4.2.0
 httpx>=0.27.0
 beautifulsoup4>=4.12.3
 prometheus-client>=0.20.0
+# Durable corpus storage (Supabase/Postgres). Optional at runtime — the
+# app falls back to file storage when GRAPHRAG_DATABASE_URL is unset.
+psycopg[binary]>=3.1.18

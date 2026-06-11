@@ -24,6 +24,12 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
+from graphrag_plus.app.corpus.blob_store import (
+    EMPTY_CHUNKS,
+    EMPTY_GRAPH,
+    BlobStore,
+    CorpusBlobs,
+)
 from graphrag_plus.app.corpus.models import CorpusBundle, CorpusMeta
 from graphrag_plus.app.graph.store import GraphStore
 from graphrag_plus.app.retrieval.service import RetrievalService
@@ -43,9 +49,13 @@ _CORPUS_ID_RE = re.compile(r"^corpus_[A-Za-z0-9_-]{1,64}$")
 class CorpusManager:
     """Owns the directory of corpora and their loaded bundles."""
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, blob_store: BlobStore | None = None):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        # When set, the blob store is the durable source of truth and
+        # ``base_dir`` is per-instance scratch. When None, ``base_dir`` is
+        # the source of truth (single-host / local file mode).
+        self.blob_store = blob_store
         self._bundles: dict[str, CorpusBundle] = {}
         # The "active" corpus is the one used when callers don't specify a
         # corpus_id. Defaults to the most recently created or queried.
@@ -96,6 +106,12 @@ class CorpusManager:
         bundle = CorpusBundle(meta=meta, graph_store=graph_store, retrieval=retrieval)
         self._bundles[corpus_id] = bundle
         self.active_corpus_id = corpus_id
+        # Register the (empty) corpus in the durable store so other instances
+        # can see it immediately; ingest will flush its populated blobs later.
+        if self.blob_store is not None:
+            self.blob_store.save(
+                CorpusBlobs(meta=asdict(meta), graph=dict(EMPTY_GRAPH), chunks=list(EMPTY_CHUNKS))
+            )
         logger.info(
             "corpus.created id=%s name=%r domain=%s",
             corpus_id,
@@ -106,9 +122,17 @@ class CorpusManager:
 
     # -------------------------------------------------------------------- get
     def get(self, corpus_id: str) -> CorpusBundle:
-        """Return the bundle for ``corpus_id``. Loads from disk if needed."""
+        """Return the bundle for ``corpus_id``.
+
+        In blob-store mode the corpus is hydrated from the durable store
+        into the local scratch dir on a cache miss, so an ingest performed
+        on another instance is visible here. In file mode it loads from the
+        local directory.
+        """
         if corpus_id in self._bundles:
             return self._bundles[corpus_id]
+        if self.blob_store is not None:
+            return self._hydrate_from_store(corpus_id)
         meta = self._read_meta(corpus_id)
         if meta is None:
             raise KeyError(f"Unknown corpus_id: {corpus_id}")
@@ -121,26 +145,52 @@ class CorpusManager:
     def list(self) -> list[CorpusMeta]:
         """Return all known corpora's metadata, newest first."""
         metas: list[CorpusMeta] = []
-        for entry in self.base_dir.iterdir():
-            if not entry.is_dir() or not entry.name.startswith("corpus_"):
-                continue
-            meta = self._read_meta(entry.name)
-            if meta is not None:
-                metas.append(meta)
+        if self.blob_store is not None:
+            for raw in self.blob_store.list_meta():
+                meta = self._meta_from_dict(raw)
+                if meta is not None:
+                    metas.append(meta)
+        else:
+            for entry in self.base_dir.iterdir():
+                if not entry.is_dir() or not entry.name.startswith("corpus_"):
+                    continue
+                meta = self._read_meta(entry.name)
+                if meta is not None:
+                    metas.append(meta)
         metas.sort(key=lambda m: m.created_at, reverse=True)
         return metas
 
     def delete(self, corpus_id: str) -> None:
-        """Permanently remove a corpus directory + cached bundle."""
-        bundle = self._bundles.pop(corpus_id, None)
-        _ = bundle  # released; GraphStore has no explicit close
+        """Permanently remove a corpus from the store + local scratch."""
+        # Validate id shape even in blob mode (also guards the rmtree below).
         path = self._corpus_dir(corpus_id)
+        self._bundles.pop(corpus_id, None)
+        if self.blob_store is not None:
+            self.blob_store.delete(corpus_id)
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
         if self.active_corpus_id == corpus_id:
             remaining = self.list()
             self.active_corpus_id = remaining[0].corpus_id if remaining else None
         logger.info("corpus.deleted id=%s", corpus_id)
+
+    def flush(self, corpus_id: str) -> None:
+        """Persist a corpus's current local files back to the durable store.
+
+        No-op in file mode (the files *are* the source of truth). Called
+        after a mutating ingest so the populated graph + chunks become
+        visible to every other instance.
+        """
+        if self.blob_store is None:
+            return
+        meta = self._read_meta(corpus_id)
+        if meta is None:
+            logger.warning("corpus.flush_no_meta id=%s", corpus_id)
+            return
+        graph = load_json(self._graph_path(corpus_id), default=None) or dict(EMPTY_GRAPH)
+        chunks = load_json(self._chunks_path(corpus_id), default=None) or list(EMPTY_CHUNKS)
+        self.blob_store.save(CorpusBlobs(meta=asdict(meta), graph=graph, chunks=chunks))
+        logger.info("corpus.flushed id=%s", corpus_id)
 
     # ----------------------------------------------------------------- active
     def get_active(self) -> CorpusBundle | None:
@@ -159,38 +209,62 @@ class CorpusManager:
         return bundle
 
     def update_meta(self, corpus_id: str, **fields: object) -> CorpusMeta:
-        """Update select metadata fields and persist."""
+        """Update select metadata fields and persist (local + store)."""
         bundle = self.get(corpus_id)
         old = asdict(bundle.meta)
         old.update(fields)
         new_meta = CorpusMeta(**old)  # type: ignore[arg-type]
         bundle.meta = new_meta
         self._persist_meta(new_meta)
+        if self.blob_store is not None:
+            # Persist the meta change immediately, preserving existing blobs.
+            existing = self.blob_store.load(corpus_id)
+            graph = existing.graph if existing else dict(EMPTY_GRAPH)
+            chunks = existing.chunks if existing else list(EMPTY_CHUNKS)
+            self.blob_store.save(CorpusBlobs(meta=asdict(new_meta), graph=graph, chunks=chunks))
         return new_meta
 
     # --------------------------------------------------------------- internals
+    def _hydrate_from_store(self, corpus_id: str) -> CorpusBundle:
+        """Pull a corpus's blobs from the store into local scratch files."""
+        assert self.blob_store is not None
+        blobs = self.blob_store.load(corpus_id)
+        if blobs is None:
+            raise KeyError(f"Unknown corpus_id: {corpus_id}")
+        meta = self._meta_from_dict(blobs.meta)
+        if meta is None:
+            raise KeyError(f"Corrupt corpus meta: {corpus_id}")
+        # Materialize the three files so GraphStore/RetrievalService load them.
+        self._corpus_dir(corpus_id).mkdir(parents=True, exist_ok=True)
+        self._persist_meta(meta)
+        dump_json(self._graph_path(corpus_id), blobs.graph or dict(EMPTY_GRAPH))
+        dump_json(self._chunks_path(corpus_id), blobs.chunks or list(EMPTY_CHUNKS))
+        graph_store = GraphStore(self._graph_path(corpus_id))
+        retrieval = RetrievalService(graph_store, self._chunks_path(corpus_id))
+        bundle = CorpusBundle(meta=meta, graph_store=graph_store, retrieval=retrieval)
+        self._bundles[corpus_id] = bundle
+        return bundle
+
     def _load_existing_meta(self) -> None:
-        for meta in self.list():
-            # Don't eagerly load GraphStore/Retrieval — bundles are created
-            # on first access via ``get(corpus_id)``.
-            _ = meta
         if self.active_corpus_id is None:
             metas = self.list()
             if metas:
                 self.active_corpus_id = metas[0].corpus_id
 
-    def _read_meta(self, corpus_id: str) -> CorpusMeta | None:
-        path = self._meta_path(corpus_id)
-        if not path.exists():
-            return None
-        raw = load_json(path, default=None)
+    def _meta_from_dict(self, raw: object) -> CorpusMeta | None:
         if not isinstance(raw, dict):
             return None
         try:
             return CorpusMeta(**raw)
         except TypeError as exc:
-            logger.warning("corpus.meta_invalid id=%s error=%s", corpus_id, exc)
+            logger.warning("corpus.meta_invalid error=%s", exc)
             return None
+
+    def _read_meta(self, corpus_id: str) -> CorpusMeta | None:
+        path = self._meta_path(corpus_id)
+        if not path.exists():
+            return None
+        return self._meta_from_dict(load_json(path, default=None))
 
     def _persist_meta(self, meta: CorpusMeta) -> None:
         dump_json(self._meta_path(meta.corpus_id), asdict(meta))

@@ -12,6 +12,7 @@ from graphrag_plus.app.analyst.engine import AnalystEngine
 from graphrag_plus.app.calibration.module import CalibrationModule
 from graphrag_plus.app.config.settings import Settings
 from graphrag_plus.app.contradiction.reasoner import ContradictionReasoner
+from graphrag_plus.app.corpus.blob_store import make_blob_store
 from graphrag_plus.app.corpus.manager import CorpusManager, derive_corpus_name
 from graphrag_plus.app.corpus.models import CorpusBundle
 from graphrag_plus.app.domain.detector import detect_domain
@@ -58,7 +59,9 @@ class GraphRAGPipeline:
         # (graph store + retrieval service + metadata). The "default" corpus
         # below is created on demand to preserve backward compatibility for
         # tests / ad-hoc usage that don't pass a corpus_id.
-        self.corpus_manager = CorpusManager(settings.corpora_dir)
+        self.corpus_manager = CorpusManager(
+            settings.corpora_dir, blob_store=make_blob_store(settings.database_url)
+        )
         # Keep the legacy single-graph attributes for tests that touch
         # ``pipeline.graph_store`` / ``pipeline.retrieval`` directly. They
         # point to a "default" corpus whose data is also under corpora_dir.
@@ -301,6 +304,10 @@ class GraphRAGPipeline:
             chunk_count=bundle.meta.chunk_count + len(chunks),
             entity_count=bundle.meta.entity_count + len(entities),
         )
+        # Persist the populated graph + chunks to the durable store (if any)
+        # so this ingest is visible to every other instance. No-op in file
+        # mode, where the local files are already the source of truth.
+        self.corpus_manager.flush(bundle.meta.corpus_id)
 
         return IngestResponse(
             documents=len(documents),
