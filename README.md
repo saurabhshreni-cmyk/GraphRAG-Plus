@@ -304,10 +304,11 @@ Good local demo questions:
 The backend runs as a **Vercel Python serverless function** via
 [`api/index.py`](api/index.py): all writable paths are redirected to
 `/tmp` through `GRAPHRAG_*` env overrides, and the committed demo corpus
-is seeded on cold start so queries work immediately. Note that `/tmp` is
-ephemeral — corpora ingested on the demo survive only per serverless
-instance. For durable multi-user state, use a host with a persistent
-disk (below).
+is seeded on boot so queries work immediately. Note that `/tmp` is
+ephemeral — corpora ingested on the Vercel demo survive only per
+serverless instance. **For durable, shared-across-all-users state, run the
+backend on Render with a persistent disk (below) — that's the recommended
+production setup.**
 
 To deploy your own copy:
 
@@ -322,31 +323,53 @@ vercel env add GRAPHRAG_CORS_ORIGINS production   # https://<your-dashboard>.ver
 vercel deploy --prod
 ```
 
-### Backend — Render / Railway / Fly.io (persistent disk)
+### Backend — Render with a persistent disk (recommended for production)
 
-Any of these PaaS hosts work. The repo's existing layout means the
-backend's working directory should be `graphrag_plus/` and the Python
-package root should be the parent (`PYTHONPATH=.`).
+This repo ships a [`render.yaml`](render.yaml) Blueprint that provisions a
+web service **with a 1 GB persistent disk** mounted at `/var/data`. Every
+writable `GRAPHRAG_*` path points at that disk, so **ingested corpora
+survive restarts and deploys and are shared by every user** hitting the
+single instance. The demo corpus is seeded onto the disk automatically on
+first boot (idempotent — kept across restarts).
 
-**Render** (recommended starting point):
+**One-click deploy:**
 
-1. New → **Web Service** → connect this repo.
-2. **Root directory:** `graphrag_plus`
-3. **Build command:**
+1. Push this repo to GitHub (already done for the canonical copy).
+2. Render Dashboard → **New** → **Blueprint** → select this repo. Render
+   reads `render.yaml` and creates the service + disk.
+3. Pick a plan that supports disks (**Starter** or higher — Render's free
+   tier has no persistent disk and spins down on idle).
+4. Deploy. The service comes up at
+   `https://graphrag-plus-api.onrender.com` (or a name-suffixed variant).
+5. Point the dashboard at it and re-deploy the frontend:
    ```bash
-   python -m pip install --upgrade pip && python -m pip install -e .
+   cd frontend
+   vercel env rm  VITE_API_BASE production    # remove the old Vercel API base
+   vercel env add VITE_API_BASE production    # https://<your-render-url>.onrender.com
+   vercel deploy --prod
    ```
-4. **Start command:**
-   ```bash
-   PYTHONPATH=.. uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT
-   ```
-5. **Environment variables:**
-   - `GRAPHRAG_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`
-   - `PYTHON_VERSION=3.12`
+6. If your dashboard URL differs from the default, update
+   `GRAPHRAG_CORS_ORIGINS` in `render.yaml` (or the Render dashboard) and
+   redeploy.
 
-**Railway / Fly.io**: same idea — install `-e .`, set `PYTHONPATH=..`,
-start uvicorn binding to `$PORT`. On Fly.io, add a `Dockerfile` that
-copies the repo and runs the same command.
+> **Why a disk and not autoscaling?** The corpus store is file-backed
+> (`data/corpora/<id>/{meta,graph,chunks}.json`). A single instance with
+> one mounted disk gives one writer and one source of truth — exactly what
+> this store wants. To scale horizontally later, swap the `GraphStore` /
+> `RetrievalService` persistence for Postgres/object storage behind their
+> existing interfaces (see *Future improvements*).
+
+**Build / start (handled by `render.yaml`, shown for reference):**
+
+- Root directory: `graphrag_plus`
+- Build: `pip install --upgrade pip && pip install -e .`
+- Start: `uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`
+- Health check: `/health`
+
+**Railway / Fly.io**: same idea — install `-e .`, attach a volume, and set
+the `GRAPHRAG_*` paths to the mount. On Fly.io, add a `Dockerfile` that
+copies the repo and runs the same uvicorn command, with a `[mounts]` block
+pointing at the volume.
 
 ### Frontend — Vercel
 

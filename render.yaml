@@ -1,0 +1,61 @@
+# Render Blueprint — persistent backend for GraphRAG++.
+#
+# Deploy with: Render Dashboard → New → Blueprint → pick this repo.
+# A 1 GB persistent disk is mounted at /var/data and every writable
+# GRAPHRAG_* path points there, so ingested corpora survive restarts and
+# are shared by all users hitting the single instance. The demo corpus is
+# seeded onto the disk automatically on first boot.
+#
+# NOTE: persistent disks require a paid instance (Starter and up). A disk
+# also pins the service to a single instance (no horizontal autoscaling),
+# which is exactly what this file-backed store wants — one writer, one
+# source of truth.
+services:
+  - type: web
+    name: graphrag-plus-api
+    runtime: python
+    plan: starter
+    rootDir: graphrag_plus
+    buildCommand: pip install --upgrade pip && pip install -e .
+    startCommand: uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: graphrag-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # Lock CORS to the live dashboard. Update if the dashboard URL changes.
+      - key: GRAPHRAG_CORS_ORIGINS
+        value: https://graphrag-plus-dashboard.vercel.app
+      # All writable state lives on the mounted disk at /var/data.
+      - key: GRAPHRAG_DATA_DIR
+        value: /var/data
+      - key: GRAPHRAG_REPORTS_DIR
+        value: /var/data/reports
+      - key: GRAPHRAG_GRAPH_PATH
+        value: /var/data/graph.json
+      - key: GRAPHRAG_CHUNKS_PATH
+        value: /var/data/chunks.json
+      - key: GRAPHRAG_CORPORA_DIR
+        value: /var/data/corpora
+      - key: GRAPHRAG_GRAPH_VERSIONS_DIR
+        value: /var/data/graph_versions
+      - key: GRAPHRAG_TRUST_STATE_PATH
+        value: /var/data/trust_state.json
+      - key: GRAPHRAG_CALIBRATION_STATE_PATH
+        value: /var/data/calibration_state.json
+      - key: GRAPHRAG_REVIEW_QUEUE_PATH
+        value: /var/data/review_queue.jsonl
+      - key: GRAPHRAG_ANSWERS_LOG_PATH
+        value: /var/data/answers_log.jsonl
+      - key: GRAPHRAG_RUN_LOGS_PATH
+        value: /var/data/run_logs.jsonl
+      - key: GRAPHRAG_OUTPUTS_DIR
+        value: /var/data/outputs
+      - key: GRAPHRAG_CACHE_DIR
+        value: /var/data/.cache
+      - key: GRAPHRAG_TEMP_DIR
+        value: /var/data/.cache/tmp

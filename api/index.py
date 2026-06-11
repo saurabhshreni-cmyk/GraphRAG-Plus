@@ -3,21 +3,21 @@
 Vercel's filesystem is read-only except ``/tmp``, so every writable path
 is redirected there via the ``GRAPHRAG_*`` environment overrides BEFORE
 the app (and its module-level pipeline) is imported. The committed demo
-corpus is seeded into the writable corpora dir on cold start so the
-dashboard has a graph immediately.
+corpus is then seeded by the app itself (see ``app.api.main``), so a fresh
+``/tmp`` always has a graph to show.
 
 Note: ``/tmp`` is per-instance and ephemeral — ingested corpora survive
 only for the lifetime of the serverless instance. For durable multi-user
-state, run the backend on a host with a persistent disk (see README).
+state, deploy the backend on Render with a persistent disk (see README +
+``render.yaml``), which uses this same env-redirect mechanism pointed at a
+mounted volume instead of ``/tmp``.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
 _DATA = Path("/tmp/graphrag/data")
 _CACHE = Path("/tmp/graphrag/.cache")
 
@@ -40,17 +40,5 @@ _PATH_DEFAULTS: dict[str, Path] = {
 
 for _name, _path in _PATH_DEFAULTS.items():
     os.environ.setdefault(_name, str(_path))
-
-
-def _seed_demo_corpus() -> None:
-    """Copy the committed demo corpus into the writable corpora dir."""
-    source = _REPO_ROOT / "graphrag_plus" / "data" / "corpora" / "corpus_demo_nova"
-    target = _DATA / "corpora" / "corpus_demo_nova"
-    if source.is_dir() and not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target)
-
-
-_seed_demo_corpus()
 
 from graphrag_plus.app.api.main import app  # noqa: E402,F401
