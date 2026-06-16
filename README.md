@@ -303,11 +303,13 @@ Good local demo questions:
 
 The backend runs as a **Vercel Python serverless function** via
 [`api/index.py`](api/index.py): all writable paths are redirected to
-`/tmp` through `GRAPHRAG_*` env overrides, and the committed demo corpus
-is seeded on cold start so queries work immediately. Note that `/tmp` is
-ephemeral — corpora ingested on the demo survive only per serverless
-instance. For durable multi-user state, use a host with a persistent
-disk (below).
+`/tmp` through `GRAPHRAG_*` env overrides, and the demo corpus is seeded
+on boot so queries work immediately.
+
+By default `/tmp` is ephemeral, so corpora ingested on the demo survive
+only per serverless instance. **Add a free Postgres database (below) and
+ingested corpora become durable and shared across every instance — no
+paid host or disk required.**
 
 To deploy your own copy:
 
@@ -322,31 +324,52 @@ vercel env add GRAPHRAG_CORS_ORIGINS production   # https://<your-dashboard>.ver
 vercel deploy --prod
 ```
 
-### Backend — Render / Railway / Fly.io (persistent disk)
+### Durable storage for free — Supabase / Postgres (recommended)
 
-Any of these PaaS hosts work. The repo's existing layout means the
-backend's working directory should be `graphrag_plus/` and the Python
-package root should be the parent (`PYTHONPATH=.`).
+Set a single env var and the backend persists every corpus as JSON blobs
+in Postgres instead of ephemeral `/tmp`. Each corpus is stored as three
+`jsonb` documents (`meta`, `graph`, `chunks`) in one auto-created table
+(`graphrag_corpora`); the serverless instance's `/tmp` becomes scratch
+that is hydrated from the database on demand. Works on the **Supabase
+free tier** (or Neon, or any Postgres).
 
-**Render** (recommended starting point):
-
-1. New → **Web Service** → connect this repo.
-2. **Root directory:** `graphrag_plus`
-3. **Build command:**
-   ```bash
-   python -m pip install --upgrade pip && python -m pip install -e .
+1. Create a free project at [supabase.com](https://supabase.com).
+2. Project → **Connect** → copy the **connection pooler** URI (port
+   `6543`, transaction mode — the pooler is the right choice for
+   serverless). It looks like:
    ```
-4. **Start command:**
-   ```bash
-   PYTHONPATH=.. uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT
+   postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
    ```
-5. **Environment variables:**
-   - `GRAPHRAG_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`
-   - `PYTHON_VERSION=3.12`
+3. Set it on the **backend** Vercel project and redeploy:
+   ```bash
+   vercel env add GRAPHRAG_DATABASE_URL production   # paste the pooler URI
+   vercel deploy --prod
+   ```
+   (A bare `DATABASE_URL` is also honoured.) The table is created
+   automatically on first boot.
+4. Optional — validate the connection before/after deploy:
+   ```powershell
+   $env:GRAPHRAG_DATABASE_URL="postgresql://...:6543/postgres"
+   py -3.13 graphrag_plus/scripts/check_postgres.py   # prints OK on success
+   ```
 
-**Railway / Fly.io**: same idea — install `-e .`, set `PYTHONPATH=..`,
-start uvicorn binding to `$PORT`. On Fly.io, add a `Dockerfile` that
-copies the repo and runs the same command.
+When `GRAPHRAG_DATABASE_URL` is **unset**, the backend uses file storage
+(local disk / `/tmp`) exactly as before — Postgres is purely additive and
+the app degrades gracefully (falls back to file mode) if the database is
+ever unreachable.
+
+> **Consistency note:** each instance caches a hydrated corpus for its
+> warm lifetime, so a corpus updated by another instance becomes visible
+> after the next cold start or cache miss (eventual consistency). For the
+> demo's scale that's invisible; for heavy concurrent writes, run a single
+> always-on instance or add per-request freshness checks.
+
+### Single-host alternative — Render / Railway / Fly.io
+
+Prefer one always-on instance with a disk? Install `-e .`, set
+`PYTHONPATH=..`, point the `GRAPHRAG_*` paths at a mounted volume, and run
+`uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`. The
+same file-based store is used; no database needed.
 
 ### Frontend — Vercel
 

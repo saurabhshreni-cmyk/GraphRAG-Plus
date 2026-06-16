@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     llm_enabled: bool = False
     llm_model_name: str = "disabled"
 
+    # Optional Postgres/Supabase connection string for durable, shared-across-
+    # instances corpus storage. When set, corpora are persisted as JSON blobs
+    # in Postgres (local dir is scratch); when empty, the file-based store is
+    # used. Read from GRAPHRAG_DATABASE_URL, falling back to a bare
+    # DATABASE_URL if present (see get_settings).
+    database_url: str = ""
+
 
 def validate_settings(settings: Settings) -> None:
     """Validate settings and fail fast with clear errors."""
@@ -99,6 +106,15 @@ def validate_settings(settings: Settings) -> None:
 def get_settings() -> Settings:
     """Get settings instance."""
     settings = Settings()
+
+    # Convenience: honour a bare DATABASE_URL (what Supabase/Neon hand out)
+    # when the prefixed GRAPHRAG_DATABASE_URL isn't set, so users don't have
+    # to rename the variable.
+    if not settings.database_url:
+        fallback = os.environ.get("DATABASE_URL", "")
+        if fallback:
+            settings.database_url = fallback
+
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
     settings.graph_versions_dir.mkdir(parents=True, exist_ok=True)
