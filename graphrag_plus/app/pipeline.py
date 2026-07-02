@@ -396,6 +396,26 @@ class GraphRAGPipeline:
             },
         )
 
+        # Entity resolution: collapse duplicate entities ("Apple" / "Apple
+        # Inc") into canonical nodes so graph traversal doesn't fragment.
+        import os
+
+        if os.environ.get("GRAPHRAG_ENTITY_RESOLUTION", "1").strip().lower() not in {"0", "false", "no"}:
+            from graphrag_plus.app.embeddings.embedder import get_embedder
+            from graphrag_plus.app.graph.entity_resolver import EntityResolver
+
+            resolver = EntityResolver(store, get_embedder())
+            stats = resolver.resolve_corpus(corpus_id)
+            log_event(
+                self.logger,
+                "neo4j.entity_resolution",
+                {
+                    "corpus_id": corpus_id,
+                    "merged_count": stats.get("merged_count", 0),
+                    "time_taken_s": stats.get("time_taken_s", 0.0),
+                },
+            )
+
     def _record_contradictions(self, contradictions: list[ContradictionItem]) -> None:
         """Persist contradictions for query-time consumption + update trust."""
         for item in contradictions:
