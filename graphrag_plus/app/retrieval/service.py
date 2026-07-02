@@ -190,11 +190,15 @@ class RetrievalService:
             chunk_ids = [chunk.chunk_id for chunk in chunks]
             if not persist and self.faiss_path is not None:
                 candidate = FAISSStore(dimension=embedder.dimension)
-                if candidate.load(str(self.faiss_path)) and sorted(candidate.chunk_ids) == sorted(
-                    chunk_ids
+                if (
+                    candidate.load(str(self.faiss_path))
+                    and candidate.dimension == embedder.dimension
+                    and sorted(candidate.chunk_ids) == sorted(chunk_ids)
                 ):
                     self.faiss_store = candidate
                     return
+                # Saved index is stale (different chunks or a different
+                # embedding model's dimension) — fall through and rebuild.
             store = FAISSStore(dimension=embedder.dimension)
             embeddings = embedder.embed_batch([chunk.text for chunk in chunks])
             if len(embeddings) != len(chunks):
@@ -229,7 +233,7 @@ class RetrievalService:
             return {}, False
         try:
             embedder = get_embedder()
-            query_vec = embedder.embed_text(question)
+            query_vec = embedder.embed_query(question)
             if not query_vec:
                 return {}, False
             hits = self.faiss_store.search(query_vec, top_k=min(len(self.chunks), 50))

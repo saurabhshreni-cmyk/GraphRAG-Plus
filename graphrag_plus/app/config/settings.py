@@ -90,7 +90,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OLLAMA_BASE_URL", "GRAPHRAG_OLLAMA_BASE_URL"),
     )
     embedding_model: str = Field(
-        default="all-MiniLM-L6-v2",
+        default="BAAI/bge-large-en-v1.5",
         validation_alias=AliasChoices("EMBEDDING_MODEL", "GRAPHRAG_EMBEDDING_MODEL"),
     )
 

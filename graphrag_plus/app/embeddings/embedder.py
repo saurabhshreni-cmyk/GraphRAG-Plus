@@ -15,11 +15,25 @@ import os
 import threading
 from typing import Any
 
+from dotenv import load_dotenv
+
 from graphrag_plus.app.utils.logging_utils import get_logger
+
+load_dotenv()  # ensure EMBEDDING_MODEL from the project .env is visible
 
 logger = get_logger(__name__)
 
-_DEFAULT_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+_FALLBACK_MODEL = "BAAI/bge-large-en-v1.5"
+
+# BGE-family models are trained with an instruction prefix on the QUERY side
+# (passages are embedded bare). Applying it lifts retrieval quality by
+# several MTEB points; other model families ignore the concept entirely.
+_BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
+
+
+def _default_model_name() -> str:
+    """Resolve the model name from the environment at call time."""
+    return os.environ.get("EMBEDDING_MODEL", _FALLBACK_MODEL)
 
 
 def _dimension_of(model: Any) -> int:
@@ -33,8 +47,9 @@ def _dimension_of(model: Any) -> int:
 class Embedder:
     """Lazy, thread-safe wrapper around a SentenceTransformer model."""
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL):
-        self.model_name = model_name
+    def __init__(self, model_name: str | None = None):
+        self.model_name = model_name or _default_model_name()
+        self._is_bge = "bge" in self.model_name.lower()
         self._model: Any = None
         self._load_failed = False
         self._lock = threading.Lock()
@@ -65,9 +80,19 @@ class Embedder:
         return _dimension_of(model) if model else 0
 
     def embed_text(self, text: str) -> list[float]:
-        """Embed one string. Returns [] when the model is unavailable."""
+        """Embed one string (passage-side). [] when the model is unavailable."""
         vectors = self.embed_batch([text])
         return vectors[0] if vectors else []
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a search query.
+
+        BGE models expect their instruction prefix on queries only; for
+        other model families this is identical to :meth:`embed_text`.
+        """
+        if self._is_bge:
+            text = _BGE_QUERY_INSTRUCTION + text
+        return self.embed_text(text)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed many strings in one forward pass. [] when unavailable."""
