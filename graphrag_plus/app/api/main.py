@@ -122,11 +122,19 @@ def select_corpus(corpus_id: str) -> CorpusInfo:
 
 @app.delete("/corpora/{corpus_id}")
 def delete_corpus(corpus_id: str) -> dict[str, str]:
-    """Permanently delete a corpus (its directory + cached state)."""
+    """Permanently delete a corpus (its directory + cached state + Neo4j nodes)."""
     try:
         pipeline.corpus_manager.delete(corpus_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # Best-effort cleanup of the corpus's Neo4j partition; the file/blob
+    # stores are already gone, so a failure here only leaves orphaned nodes.
+    try:
+        from graphrag_plus.app.graph.neo4j_store import get_neo4j_store
+
+        get_neo4j_store().clear_corpus(corpus_id)
+    except Exception:
+        pipeline.logger.warning("neo4j.delete_cleanup_failed corpus=%s", corpus_id)
     return {"status": "deleted", "corpus_id": corpus_id}
 
 

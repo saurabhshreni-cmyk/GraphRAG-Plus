@@ -5,8 +5,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from dotenv import load_dotenv
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load the project-root .env into the process environment so both the
+# GRAPHRAG_-prefixed settings below and the unprefixed integration vars
+# (NEO4J_*, OLLAMA_*, EMBEDDING_MODEL) are available everywhere.
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -60,8 +66,33 @@ class Settings(BaseSettings):
     scoring_w5_uncertainty_penalty: float = 0.05
 
     random_seed: int = 42
-    llm_enabled: bool = False
-    llm_model_name: str = "disabled"
+    # LLM generation is on by default in the upgraded stack (Ollama-backed);
+    # the generator falls back to extractive answers whenever the daemon is
+    # unreachable, so this stays safe on hosts without Ollama.
+    llm_enabled: bool = True
+    llm_model_name: str = "qwen2.5:3b"
+
+    # --- external integrations (unprefixed env vars from .env) --------------
+    neo4j_uri: str = Field(
+        default="", validation_alias=AliasChoices("NEO4J_URI", "GRAPHRAG_NEO4J_URI")
+    )
+    neo4j_username: str = Field(
+        default="", validation_alias=AliasChoices("NEO4J_USERNAME", "GRAPHRAG_NEO4J_USERNAME")
+    )
+    neo4j_password: str = Field(
+        default="", validation_alias=AliasChoices("NEO4J_PASSWORD", "GRAPHRAG_NEO4J_PASSWORD")
+    )
+    ollama_model: str = Field(
+        default="qwen2.5:3b", validation_alias=AliasChoices("OLLAMA_MODEL", "GRAPHRAG_OLLAMA_MODEL")
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias=AliasChoices("OLLAMA_BASE_URL", "GRAPHRAG_OLLAMA_BASE_URL"),
+    )
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        validation_alias=AliasChoices("EMBEDDING_MODEL", "GRAPHRAG_EMBEDDING_MODEL"),
+    )
 
     # Optional Postgres/Supabase connection string for durable, shared-across-
     # instances corpus storage. When set, corpora are persisted as JSON blobs
