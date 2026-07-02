@@ -1,4 +1,30 @@
-# PROGRESS — Production Upgrade (spaCy + Ollama + Neo4j + FAISS)
+# PROGRESS — Production Upgrade
+
+## Session v2 (2026-07-03) — model + quality upgrades — IN PROGRESS
+
+| Step | Deliverable | Status |
+|---|---|---|
+| 0 | Health check: 82 tests, /health, Neo4j (674 nodes), Ollama (4 models), live LLM query | ✅ all PASS |
+| 1 | Embeddings → BAAI/bge-large-en-v1.5 (1024-dim, BGE query prefix, stale-index guard, old indexes purged) | ✅ committed |
+| 2 | Extraction/generation LLM → qwen3.5:4b (think=false, 120s extraction timeout for cold loads) | ✅ committed |
+| 3 | DeepSeek R1 8b reasoning verifier (final-answer gate; verified/changed/summary surfaced through API) | ✅ committed |
+| 4 | Entity resolution & dedup | ⏳ next |
+| 5 | Personalized PageRank retrieval | pending |
+| 6 | New API endpoints | pending |
+| 7 | Frontend upgrade | pending |
+| 8 | Full E2E v2 | pending |
+| 9 | Merge to main | pending |
+| 10 | Final docs | pending |
+
+Session v2 notes:
+- Verifier timeout is env-tuned to 150s in `.env` (`GRAPHRAG_VERIFIER_TIMEOUT_S`) — R1-8b thinking takes ~90s on this laptop; the 60s spec default remains the constructor fallback. On timeout the draft answer is returned unchanged with `verified_by_reasoning=false` (graceful).
+- Verified live: draft (qwen3.5:4b) → verify (deepseek-r1:8b) → verified=True, changed=False, 93.6s, real reasoning summary captured from Ollama's `thinking` field.
+- qwen3.5:4b extraction on the Apple/Beats test text: 7 entities with descriptions + 5 typed relationships, clean Pydantic parse (vs 3 relations from qwen2.5:3b).
+- bge-large checks: 1024-dim confirmed; cosine("Apple bought Beats","Apple acquired Beats") = 0.964 > 0.90.
+
+---
+
+# Session v1 — Production Upgrade (spaCy + Ollama + Neo4j + FAISS)
 
 Branch: `feat/production-upgrade` (branched off `main`)
 Status: **ALL 9 STEPS COMPLETE** — upgraded system verified end to end.
