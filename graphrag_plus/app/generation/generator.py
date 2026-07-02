@@ -31,10 +31,11 @@ import re
 from collections import Counter
 from typing import Protocol
 
-# Sentinel string the LLM is instructed to emit when evidence doesn't cover
-# the question. Detecting it lets us fall back to extractive output instead
+# Sentinel strings the LLM is instructed to emit when evidence doesn't cover
+# the question. Detecting them lets us fall back to extractive output instead
 # of returning a verbatim refusal that the user can't act on.
 LLM_ABSTAIN_TOKEN = "I cannot answer based on the provided context."
+LLM_ABSTAIN_TOKEN_ALT = "I don't have enough information to answer this."
 
 # Stopwords used for scoring sentences against the query. Kept in sync with
 # the retrieval service philosophy: we want content overlap, not boilerplate
@@ -870,15 +871,15 @@ class AnswerGenerator:
             question, evidence, intent=intent, comparison_terms=comparison_terms
         )
 
-        # Flow (matches the architecture diagram):
-        #     evidence empty             -> abstain, never call LLM (handled above)
-        #     llm_enabled=False          -> extractive
-        #     llm_enabled=True
-        #         confidence >= threshold -> extractive (already strong, save tokens)
-        #         confidence <  threshold -> LLM, with extractive fallback on error
+        # Flow (upgraded — LLM-first):
+        #     evidence empty    -> abstain, never call LLM (handled above)
+        #     llm_enabled=False -> extractive
+        #     llm_enabled=True  -> LLM synthesis, extractive fallback on any
+        #                          error / timeout / abstain / quality reject.
+        # ``confidence`` / ``answer_threshold`` no longer gate the LLM call;
+        # they still drive the failure classifier upstream.
+        _ = confidence, answer_threshold
         if not self.llm_enabled:
-            return extractive, False, False
-        if confidence >= answer_threshold:
             return extractive, False, False
         try:
             llm_answer = self._llm_answer(question, evidence)
@@ -896,8 +897,10 @@ class AnswerGenerator:
         # only runs when len(evidence) > 0), so an abstain means the model
         # disagreed with retrieval. Trust retrieval and fall back to the
         # extractive sentence-rank answer.
-        if LLM_ABSTAIN_TOKEN.lower().rstrip(".") in llm_answer.lower():
-            return extractive, False, True
+        lowered_answer = llm_answer.lower()
+        for abstain in (LLM_ABSTAIN_TOKEN, LLM_ABSTAIN_TOKEN_ALT):
+            if abstain.lower().rstrip(".") in lowered_answer:
+                return extractive, False, True
 
         # Quality filter: reject completions that drifted off-topic. The
         # retrieval gates already ensure the chunks share query terms with
@@ -906,6 +909,61 @@ class AnswerGenerator:
             return extractive, False, True
 
         return llm_answer, True, False
+
+    def generate_result(
+        self,
+        question: str,
+        evidence: list[dict[str, object]],
+        confidence: float,
+        answer_threshold: float,
+        *,
+        intent: str | None = None,
+        comparison_terms: tuple[str, str] | None = None,
+    ) -> "AnswerResult":
+        """Structured variant of :meth:`generate` returning an AnswerResult.
+
+        Confidence combines the calibrated retrieval confidence with a bonus
+        for how many independent retrieval signals (BM25 / semantic / graph)
+        contributed to the evidence — answers backed by multiple signals are
+        more trustworthy than single-signal hits.
+        """
+        from graphrag_plus.app.models.schemas import AnswerResult
+
+        answer, used_llm, llm_failed = self.generate(
+            question,
+            evidence,
+            confidence,
+            answer_threshold,
+            intent=intent,
+            comparison_terms=comparison_terms,
+        )
+
+        signals: set[str] = set()
+        for item in evidence:
+            if float(item.get("raw_bm25", 0.0) or 0.0) > 0:
+                signals.add("bm25")
+            if float(item.get("raw_cosine", 0.0) or 0.0) > 0:
+                signals.add("semantic")
+            if float(item.get("raw_graph", item.get("graph_score", 0.0)) or 0.0) > 0:
+                signals.add("graph")
+        signal_bonus = 0.05 * max(0, len(signals) - 1)
+        final_confidence = min(1.0, max(0.0, confidence + signal_bonus))
+
+        sources = list(dict.fromkeys(str(item.get("source_id", "")) for item in evidence if item.get("source_id")))
+        reasoning_bits = [
+            f"signals={'+'.join(sorted(signals)) or 'none'}",
+            f"generator={'llm' if used_llm else 'extractive'}",
+        ]
+        if llm_failed:
+            reasoning_bits.append("llm_failed=fallback_to_extractive")
+
+        return AnswerResult(
+            answer=answer,
+            confidence=final_confidence,
+            sources=sources,
+            entities_used=[],
+            reasoning="; ".join(reasoning_bits),
+        )
 
 
 # --- module-level helpers ---------------------------------------------------
