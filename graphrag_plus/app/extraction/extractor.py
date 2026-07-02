@@ -32,6 +32,8 @@ import os
 import re
 from typing import Any
 
+from dotenv import load_dotenv
+
 from graphrag_plus.app.extraction.models import Entity as LegacyEntity
 from graphrag_plus.app.extraction.models import Relation as LegacyRelation
 from graphrag_plus.app.ingestion.models import Chunk
@@ -43,13 +45,18 @@ from graphrag_plus.app.models.schemas import (
 )
 from graphrag_plus.app.utils.logging_utils import get_logger
 
+load_dotenv()  # OLLAMA_* from the project .env must be visible at import time
+
 logger = get_logger(__name__)
 
 # --- configuration -----------------------------------------------------------
 
 _OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
-_OLLAMA_TIMEOUT_S = float(os.environ.get("GRAPHRAG_LLM_EXTRACTION_TIMEOUT_S", "45"))
+_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")
+# 120s default: the first call after idle pays the model cold-load (~30-60s
+# for a 4B model on 16GB RAM) on top of generation. Warm calls run in
+# 10-25s; the per-ingest chunk budget keeps total ingest time bounded.
+_OLLAMA_TIMEOUT_S = float(os.environ.get("GRAPHRAG_LLM_EXTRACTION_TIMEOUT_S", "120"))
 _LLM_MAX_ATTEMPTS = 2
 
 _SPACY_MODEL = "en_core_web_sm"
@@ -281,6 +288,10 @@ def _llm_extract(text: str, chunk_id: str, spacy_entities: list[Entity]) -> Extr
                     {"role": "user", "content": user_prompt},
                 ],
                 format="json",
+                # think=False: reasoning-capable models (qwen3.5, deepseek-r1)
+                # would otherwise emit long hidden reasoning before the JSON,
+                # blowing the timeout. Non-thinking models ignore the flag.
+                think=False,
                 options={"temperature": 0.0, "num_predict": 1200},
             )
             raw = response["message"]["content"]

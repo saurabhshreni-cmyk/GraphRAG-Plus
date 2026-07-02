@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # the generator falls back to extractive answers whenever the daemon is
     # unreachable, so this stays safe on hosts without Ollama.
     llm_enabled: bool = True
-    llm_model_name: str = "qwen2.5:3b"
+    llm_model_name: str = "qwen3.5:4b"
 
     # --- external integrations (unprefixed env vars from .env) --------------
     neo4j_uri: str = Field(
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("NEO4J_PASSWORD", "GRAPHRAG_NEO4J_PASSWORD")
     )
     ollama_model: str = Field(
-        default="qwen2.5:3b", validation_alias=AliasChoices("OLLAMA_MODEL", "GRAPHRAG_OLLAMA_MODEL")
+        default="qwen3.5:4b", validation_alias=AliasChoices("OLLAMA_MODEL", "GRAPHRAG_OLLAMA_MODEL")
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434",
