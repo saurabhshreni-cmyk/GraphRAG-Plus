@@ -76,3 +76,7 @@ class AnswerResult(BaseModel):
     sources: list[str] = Field(default_factory=list)
     entities_used: list[str] = Field(default_factory=list)
     reasoning: str = ""
+    # DeepSeek R1 reasoning-verification metadata.
+    verified_by_reasoning: bool = False
+    reasoning_summary: str = ""
+    answer_changed_by_reasoning: bool = False

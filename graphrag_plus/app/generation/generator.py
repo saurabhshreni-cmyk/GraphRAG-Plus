@@ -910,6 +910,67 @@ class AnswerGenerator:
 
         return llm_answer, True, False
 
+    # ------------------------------------------------- reasoning verification
+    _verifier = None  # class-level lazy singleton (shared across corpora)
+
+    @classmethod
+    def _get_verifier(cls):
+        if cls._verifier is None:
+            from graphrag_plus.app.generation.reasoning_verifier import ReasoningVerifier
+
+            cls._verifier = ReasoningVerifier()
+        return cls._verifier
+
+    @staticmethod
+    def _verifier_enabled() -> bool:
+        import os
+
+        return os.environ.get("GRAPHRAG_REASONING_VERIFIER", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+
+    def generate_verified(
+        self,
+        question: str,
+        evidence: list[dict[str, object]],
+        confidence: float,
+        answer_threshold: float,
+        *,
+        intent: str | None = None,
+        comparison_terms: tuple[str, str] | None = None,
+    ) -> tuple[str, bool, bool, object | None]:
+        """:meth:`generate` plus a DeepSeek R1 verification pass on LLM drafts.
+
+        Returns ``(answer, used_llm, llm_failed, verification)`` where
+        ``verification`` is a
+        :class:`~graphrag_plus.app.generation.reasoning_verifier.VerificationResult`
+        or ``None`` when verification didn't run (extractive answer, verifier
+        disabled, or model unavailable). Never raises past :meth:`generate`.
+        """
+        answer, used_llm, llm_failed = self.generate(
+            question,
+            evidence,
+            confidence,
+            answer_threshold,
+            intent=intent,
+            comparison_terms=comparison_terms,
+        )
+        # Verify only genuine LLM drafts: extractive output is deterministic
+        # and already evidence-bound, so a reasoning pass adds latency for no
+        # grounding benefit.
+        if not used_llm or not self._verifier_enabled():
+            return answer, used_llm, llm_failed, None
+        try:
+            verifier = self._get_verifier()
+            if not verifier.available():
+                return answer, used_llm, llm_failed, None
+            verification = verifier.verify(question, answer, evidence)
+            return verification.final_answer, used_llm, llm_failed, verification
+        except Exception:  # defensive: verification must never break answering
+            return answer, used_llm, llm_failed, None
+
     def generate_result(
         self,
         question: str,
@@ -929,7 +990,7 @@ class AnswerGenerator:
         """
         from graphrag_plus.app.models.schemas import AnswerResult
 
-        answer, used_llm, llm_failed = self.generate(
+        answer, used_llm, llm_failed, verification = self.generate_verified(
             question,
             evidence,
             confidence,
@@ -963,6 +1024,9 @@ class AnswerGenerator:
             sources=sources,
             entities_used=[],
             reasoning="; ".join(reasoning_bits),
+            verified_by_reasoning=bool(verification and getattr(verification, "verified", False)),
+            reasoning_summary=str(getattr(verification, "reasoning_summary", "") or ""),
+            answer_changed_by_reasoning=bool(verification and getattr(verification, "changed", False)),
         )
 
 

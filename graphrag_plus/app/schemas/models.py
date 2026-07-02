@@ -135,6 +135,10 @@ class QueryResponse(BaseModel):
     corpus_id: str | None = None
     corpus_name: str | None = None
     corpus_domain: str | None = None
+    # DeepSeek R1 reasoning-verification metadata (final answer quality gate).
+    verified_by_reasoning: bool = False
+    reasoning_summary: str = ""
+    answer_changed_by_reasoning: bool = False
 
 
 class GraphResponse(BaseModel):

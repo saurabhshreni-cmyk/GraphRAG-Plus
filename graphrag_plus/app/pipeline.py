@@ -533,9 +533,9 @@ class GraphRAGPipeline:
             self.generator.llm_enabled = request.llm_enabled
 
         generation_start = time.perf_counter()
-        answer_text, used_llm, llm_failed = self._safe(
+        answer_text, used_llm, llm_failed, verification = self._safe(
             "generation.generate",
-            lambda: self.generator.generate(
+            lambda: self.generator.generate_verified(
                 request.question,
                 [item.model_dump() for item in evidence_items],
                 calibrated_confidence,
@@ -543,7 +543,7 @@ class GraphRAGPipeline:
                 intent=intent.value,
                 comparison_terms=cmp_terms,
             ),
-            ("I cannot answer reliably due to an internal error.", False, True),
+            ("I cannot answer reliably due to an internal error.", False, True, None),
         )
         module_timings["generation_ms"] = self._ms_since(generation_start)
         # Restore the global default so subsequent requests aren't affected.
@@ -651,6 +651,9 @@ class GraphRAGPipeline:
             corpus_id=bundle.meta.corpus_id,
             corpus_name=bundle.meta.name,
             corpus_domain=bundle.meta.domain,
+            verified_by_reasoning=bool(verification and getattr(verification, "verified", False)),
+            reasoning_summary=str(getattr(verification, "reasoning_summary", "") or ""),
+            answer_changed_by_reasoning=bool(verification and getattr(verification, "changed", False)),
         )
 
         output_payload = {
