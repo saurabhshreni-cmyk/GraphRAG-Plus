@@ -260,7 +260,9 @@ class RetrievalService:
                 entity_names = _tokenize(question)[:5]
             if not entity_names:
                 return {}
-            rows = get_neo4j_store().get_related_chunks(entity_names, self.corpus_id, max_hops=2)
+            # Personalized PageRank over the entity graph; internally falls
+            # back to 2-hop traversal for tiny corpora or on any failure.
+            rows = get_neo4j_store().get_chunks_pagerank(entity_names, self.corpus_id)
             scores: dict[str, float] = {}
             for row in rows:
                 chunk_id = str(row.get("chunk_id", ""))

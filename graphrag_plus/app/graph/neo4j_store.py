@@ -281,6 +281,155 @@ class Neo4jStore:
         )
         return rows
 
+    def get_chunks_pagerank(
+        self,
+        seed_entity_names: list[str],
+        corpus_id: str,
+        iterations: int = 20,
+        damping: float = 0.85,
+    ) -> list[dict[str, Any]]:
+        """Personalized PageRank seeded on the query's entities.
+
+        Consistently outperforms fixed-depth traversal for GraphRAG: score
+        mass flows out from the seed entities across the whole entity graph,
+        so strongly-connected multi-hop neighbours outrank weakly-connected
+        one-hop ones.
+
+        Adjacency = typed RELATES_TO edges ∪ co-mention edges (two entities
+        sharing a chunk), treated as undirected. Chunks are scored by the
+        summed PPR mass of the entities that mention them, normalized to
+        [0, 1].
+
+        Falls back to :meth:`get_related_chunks` (2-hop) when the corpus has
+        fewer than 5 entities, no seed matches, or anything fails.
+        """
+        try:
+            if not seed_entity_names:
+                return []
+            rows = self._run(
+                "MATCH (e:Entity {corpus_id: $corpus_id}) RETURN e.name AS name",
+                corpus_id=corpus_id,
+            )
+            names = [str(r["name"]) for r in rows if r.get("name")]
+            if len(names) < 5:
+                logger.info("retrieval.graph_signal method=2hop_fallback reason=small_corpus")
+                return self.get_related_chunks(seed_entity_names, corpus_id)
+
+            index = {name: i for i, name in enumerate(names)}
+            lower_index = {name.lower(): i for i, name in enumerate(names)}
+
+            # Seeds: exact case-insensitive match first, then containment.
+            seeds: set[int] = set()
+            for seed in seed_entity_names:
+                s = seed.lower().strip()
+                if not s:
+                    continue
+                if s in lower_index:
+                    seeds.add(lower_index[s])
+                    continue
+                for name, i in index.items():
+                    low = name.lower()
+                    if s in low or low in s:
+                        seeds.add(i)
+            if not seeds:
+                logger.info("retrieval.graph_signal method=2hop_fallback reason=no_seed_match")
+                return self.get_related_chunks(seed_entity_names, corpus_id)
+
+            # Undirected adjacency: typed relations + co-mentions.
+            adjacency: dict[int, set[int]] = {i: set() for i in range(len(names))}
+            rel_edges = self._run(
+                """
+                MATCH (a:Entity {corpus_id: $corpus_id})-[:RELATES_TO]->(b:Entity {corpus_id: $corpus_id})
+                RETURN a.name AS a, b.name AS b
+                """,
+                corpus_id=corpus_id,
+            )
+            co_edges = self._run(
+                """
+                MATCH (a:Entity {corpus_id: $corpus_id})-[:MENTIONED_IN]->(c:Chunk)
+                      <-[:MENTIONED_IN]-(b:Entity {corpus_id: $corpus_id})
+                WHERE a.name < b.name
+                RETURN a.name AS a, b.name AS b
+                """,
+                corpus_id=corpus_id,
+            )
+            for edge in list(rel_edges) + list(co_edges):
+                ia, ib = index.get(str(edge.get("a", ""))), index.get(str(edge.get("b", "")))
+                if ia is None or ib is None or ia == ib:
+                    continue
+                adjacency[ia].add(ib)
+                adjacency[ib].add(ia)
+
+            # Power iteration.
+            n = len(names)
+            personalization = [0.0] * n
+            for i in seeds:
+                personalization[i] = 1.0 / len(seeds)
+            scores = list(personalization)
+            for _ in range(max(1, iterations)):
+                incoming = [0.0] * n
+                for node, neighbours in adjacency.items():
+                    if not neighbours or scores[node] == 0.0:
+                        continue
+                    share = scores[node] / len(neighbours)
+                    for neighbour in neighbours:
+                        incoming[neighbour] += share
+                scores = [
+                    damping * incoming[i] + (1.0 - damping) * personalization[i] for i in range(n)
+                ]
+
+            top = sorted(range(n), key=lambda i: scores[i], reverse=True)[:20]
+            top = [i for i in top if scores[i] > 0.0]
+            if not top:
+                logger.info("retrieval.graph_signal method=2hop_fallback reason=zero_scores")
+                return self.get_related_chunks(seed_entity_names, corpus_id)
+
+            chunk_rows = self._run(
+                """
+                UNWIND $names AS name
+                MATCH (e:Entity {name: name, corpus_id: $corpus_id})-[:MENTIONED_IN]->(c:Chunk)
+                RETURN c.chunk_id AS chunk_id, c.source AS source, e.name AS entity
+                """,
+                names=[names[i] for i in top],
+                corpus_id=corpus_id,
+            )
+            score_of = {names[i]: scores[i] for i in top}
+            chunk_scores: dict[str, float] = {}
+            chunk_sources: dict[str, str] = {}
+            for row in chunk_rows:
+                chunk_id = str(row.get("chunk_id", ""))
+                if not chunk_id:
+                    continue
+                chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + score_of.get(
+                    str(row.get("entity", "")), 0.0
+                )
+                chunk_sources.setdefault(chunk_id, str(row.get("source", "")))
+            if not chunk_scores:
+                logger.info("retrieval.graph_signal method=2hop_fallback reason=no_chunks")
+                return self.get_related_chunks(seed_entity_names, corpus_id)
+
+            max_score = max(chunk_scores.values())
+            logger.info(
+                "retrieval.graph_signal method=pagerank seeds=%d entities=%d chunks=%d",
+                len(seeds),
+                n,
+                len(chunk_scores),
+            )
+            ranked = sorted(chunk_scores.items(), key=lambda kv: kv[1], reverse=True)[:50]
+            return [
+                {
+                    "chunk_id": chunk_id,
+                    "source": chunk_sources.get(chunk_id, ""),
+                    "weight": round(score / max_score, 4) if max_score > 0 else 0.0,
+                    "ppr_score": round(score, 6),
+                }
+                for chunk_id, score in ranked
+            ]
+        except Exception as exc:
+            logger.warning("neo4j.pagerank_failed error=%s — 2-hop fallback", str(exc)[:200])
+            logger.info("retrieval.graph_signal method=2hop_fallback reason=error")
+            return self.get_related_chunks(seed_entity_names, corpus_id)
+
     def get_entity_neighbors(self, entity_name: str, corpus_id: str) -> list[str]:
         """Names of entities directly connected to ``entity_name``."""
         rows = self._run(
