@@ -8,12 +8,12 @@
 | 1 | Embeddings → BAAI/bge-large-en-v1.5 (1024-dim, BGE query prefix, stale-index guard, old indexes purged) | ✅ committed |
 | 2 | Extraction/generation LLM → qwen3.5:4b (think=false, 120s extraction timeout for cold loads) | ✅ committed |
 | 3 | DeepSeek R1 8b reasoning verifier (final-answer gate; verified/changed/summary surfaced through API) | ✅ committed |
-| 4 | Entity resolution & dedup | ⏳ next |
-| 5 | Personalized PageRank retrieval | pending |
-| 6 | New API endpoints | pending |
-| 7 | Frontend upgrade | pending |
-| 8 | Full E2E v2 | pending |
-| 9 | Merge to main | pending |
+| 4 | Entity resolution & dedup (string + token-prefix + embedding passes, union-find clusters; live test: Apple/Apple Inc/Apple Incorporated → 1 node, Tim/Timothy Cook → 1 node) | ✅ committed |
+| 5 | Personalized PageRank retrieval (RELATES_TO ∪ co-mention adjacency; 50 weighted chunks vs 1 from 2-hop on the AI corpus; 2-hop kept as fallback) | ✅ committed |
+| 6 | New API endpoints: /graph/{cid}/full, /query-path, /entity/{name}, /stats, POST /ingest/file (PDF/TXT/MD/DOCX/HTML), /corpora/{cid}/chunks — all smoke-tested 200 | ✅ committed |
+| 7 | Frontend upgrade: type-colored graph + filter/search + red query-path pulse + entity side panel (Neo4j-backed), drag-drop upload with stages, DeepSeek R1 badge + signal pills + collapsible provenance; `vite build` clean | ✅ committed |
+| 8 | Full E2E v2 — see [E2E_RESULTS_V2.md](E2E_RESULTS_V2.md); includes 5 quality fixes found during testing (BGE floors, full-text context, grounding-aware quality gate, temporal endpoint filter, tunable gen timeout); 82/82 tests | ✅ committed |
+| 9 | Merge to main | ⏳ in progress |
 | 10 | Final docs | pending |
 
 Session v2 notes:
