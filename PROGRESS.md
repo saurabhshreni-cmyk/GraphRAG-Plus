@@ -1,101 +1,146 @@
-# PROGRESS — Production Upgrade
+# GraphRAG++ — Production System Documentation
 
-## Session v2 (2026-07-03) — model + quality upgrades — IN PROGRESS
-
-| Step | Deliverable | Status |
-|---|---|---|
-| 0 | Health check: 82 tests, /health, Neo4j (674 nodes), Ollama (4 models), live LLM query | ✅ all PASS |
-| 1 | Embeddings → BAAI/bge-large-en-v1.5 (1024-dim, BGE query prefix, stale-index guard, old indexes purged) | ✅ committed |
-| 2 | Extraction/generation LLM → qwen3.5:4b (think=false, 120s extraction timeout for cold loads) | ✅ committed |
-| 3 | DeepSeek R1 8b reasoning verifier (final-answer gate; verified/changed/summary surfaced through API) | ✅ committed |
-| 4 | Entity resolution & dedup (string + token-prefix + embedding passes, union-find clusters; live test: Apple/Apple Inc/Apple Incorporated → 1 node, Tim/Timothy Cook → 1 node) | ✅ committed |
-| 5 | Personalized PageRank retrieval (RELATES_TO ∪ co-mention adjacency; 50 weighted chunks vs 1 from 2-hop on the AI corpus; 2-hop kept as fallback) | ✅ committed |
-| 6 | New API endpoints: /graph/{cid}/full, /query-path, /entity/{name}, /stats, POST /ingest/file (PDF/TXT/MD/DOCX/HTML), /corpora/{cid}/chunks — all smoke-tested 200 | ✅ committed |
-| 7 | Frontend upgrade: type-colored graph + filter/search + red query-path pulse + entity side panel (Neo4j-backed), drag-drop upload with stages, DeepSeek R1 badge + signal pills + collapsible provenance; `vite build` clean | ✅ committed |
-| 8 | Full E2E v2 — see [E2E_RESULTS_V2.md](E2E_RESULTS_V2.md); includes 5 quality fixes found during testing (BGE floors, full-text context, grounding-aware quality gate, temporal endpoint filter, tunable gen timeout); 82/82 tests | ✅ committed |
-| 9 | Merge to main | ⏳ in progress |
-| 10 | Final docs | pending |
-
-Session v2 notes:
-- Verifier timeout is env-tuned to 150s in `.env` (`GRAPHRAG_VERIFIER_TIMEOUT_S`) — R1-8b thinking takes ~90s on this laptop; the 60s spec default remains the constructor fallback. On timeout the draft answer is returned unchanged with `verified_by_reasoning=false` (graceful).
-- Verified live: draft (qwen3.5:4b) → verify (deepseek-r1:8b) → verified=True, changed=False, 93.6s, real reasoning summary captured from Ollama's `thinking` field.
-- qwen3.5:4b extraction on the Apple/Beats test text: 7 entities with descriptions + 5 typed relationships, clean Pydantic parse (vs 3 relations from qwen2.5:3b).
-- bge-large checks: 1024-dim confirmed; cosine("Apple bought Beats","Apple acquired Beats") = 0.964 > 0.90.
+**Status: COMPLETE.** All upgrade phases merged to `main` and pushed (`fa84e04`). 82/82 tests passing. Full E2E verified — see [E2E_RESULTS_V2.md](E2E_RESULTS_V2.md) and [E2E_RESULTS.md](E2E_RESULTS.md).
 
 ---
 
-# Session v1 — Production Upgrade (spaCy + Ollama + Neo4j + FAISS)
+## 1. Complete Architecture
 
-Branch: `feat/production-upgrade` (branched off `main`)
-Status: **ALL 9 STEPS COMPLETE** — upgraded system verified end to end.
-
-## What was completed
-
-| Step | Deliverable | Commit | Status |
-|---|---|---|---|
-| 1 | Pydantic schemas (`Entity`, `Relationship`, `ExtractionResult`, `RetrievalResult`, `AnswerResult`) | `feat: add pydantic schemas for full pipeline` | ✅ |
-| 2 | spaCy + Ollama two-stage extraction (regex extractor preserved as fallback) | `feat: replace regex extraction with spaCy + Ollama pipeline` | ✅ |
-| 3 | Neo4j AuraDB store: CRUD, batched UNWIND writes, 2-hop traversal, corpus isolation, health check | `feat: add Neo4j graph store with full CRUD and traversal` | ✅ |
-| 4 | Lazy `all-MiniLM-L6-v2` embedder + FAISS IndexFlatIP store with save/load | `feat: add sentence-transformers embedder and FAISS vector store` | ✅ |
-| 5 | Hybrid retrieval: BM25 0.35 + FAISS semantic 0.40 + Neo4j graph 0.25, TF-IDF/BM25 fallback | `feat: upgrade retrieval to BM25 + FAISS semantic + Neo4j graph hybrid` | ✅ |
-| 6 | Ollama generation (qwen2.5:3b, 30s timeout, spec prompt) with extractive fallback + `AnswerResult` | `feat: upgrade generation with Ollama LLM + Pydantic structured output` | ✅ |
-| 7 | Pipeline wiring: ingest → Neo4j sync + FAISS build; settings load NEO4J_*/OLLAMA_*/EMBEDDING_MODEL from `.env` | `feat: wire full upgraded pipeline end to end` | ✅ |
-| 8 | E2E test: Wikipedia AI article ingest + 3 queries + Neo4j verification — see [E2E_RESULTS.md](E2E_RESULTS.md) | `test: full end to end pipeline test results` | ✅ |
-| 9 | This file | `docs: update PROGRESS.md with full session summary` | ✅ |
-
-Regression suite: **82/82 existing tests pass** (LLM paths disabled for determinism).
-
-## What failed and why (honest notes)
-
-- **E2E query 2** ("Who are the key researchers in AI?") returned an extractive fallback with `failure_type=LLM_FAILURE`: the LLM correctly abstained because the retrieved chunks don't enumerate researchers. Designed behavior, not a crash — but retrieval could rank a researcher-dense chunk higher (future work).
-- **Relations are sparse** (11 from 270 chunks) because only the LLM stage emits relationships and it's budgeted to 8 chunks per ingest (`GRAPHRAG_LLM_EXTRACTION_MAX_CHUNKS`, default 8). Raise it for richer graphs at the cost of ~15s/chunk.
-- Nothing was skipped; no step required the 2-attempt abandon rule.
-
-## Files created
-
-- `graphrag_plus/app/models/__init__.py`, `graphrag_plus/app/models/schemas.py`
-- `graphrag_plus/app/graph/neo4j_store.py`
-- `graphrag_plus/app/embeddings/__init__.py`, `graphrag_plus/app/embeddings/embedder.py`, `graphrag_plus/app/embeddings/faiss_store.py`
-- `graphrag_plus/app/extraction/legacy_extractor.py` (the old regex extractor, preserved via `git mv`)
-- `E2E_RESULTS.md`, `PROGRESS.md`
-- `.env` (project root — gitignored, never committed; holds NEO4J_URI/USERNAME/PASSWORD, OLLAMA_MODEL, OLLAMA_BASE_URL, EMBEDDING_MODEL)
-
-## Files modified
-
-- `graphrag_plus/app/extraction/extractor.py` — full rewrite (spaCy + Ollama; keeps `extract_from_chunks` API)
-- `graphrag_plus/app/retrieval/service.py` — hybrid 3-signal retrieval
-- `graphrag_plus/app/generation/generator.py` — LLM-first gating, dual abstain tokens, `generate_result()`
-- `graphrag_plus/app/generation/llm_clients.py` — .env-driven Ollama client, spec prompt, 30s timeout, default model qwen2.5:3b
-- `graphrag_plus/app/config/settings.py` — `llm_enabled=True` default; NEO4J_*/OLLAMA_*/EMBEDDING_MODEL fields via `.env`
-- `graphrag_plus/app/pipeline.py` — `_sync_to_neo4j()` on every ingest (batched, corpus-scoped, non-blocking)
-- `graphrag_plus/app/api/main.py` — corpus delete also clears its Neo4j partition
-
-Untouched by design: React frontend, `vercel.json`, `api/index.py`, chunking pipeline, BM25 logic.
-
-## How to run locally
-
-```powershell
-cd C:\Users\Saurabh\Desktop\GraphRAG
-# prerequisites: Ollama running with qwen2.5:3b pulled; .env present at repo root
-.\venv\Scripts\python.exe -m uvicorn graphrag_plus.app.api.main:app --port 8000
-# frontend (separate terminal):
-cd frontend; npm install; npm run dev   # Vite on :5173, CORS pre-configured
+```
+                              ┌─────────────────────────────────────────────┐
+                              │       React + Vite frontend  (:5173)        │
+                              │  drag-drop upload · corpus switcher ·       │
+                              │  force-graph viz (typed colors, query-path  │
+                              │  trace, entity panel) · answer provenance   │
+                              │  (signal pills, DeepSeek R1 badge)          │
+                              └──────────────────┬──────────────────────────┘
+                                                 │ REST (CORS)
+                              ┌──────────────────▼──────────────────────────┐
+                              │           FastAPI backend  (:8000)          │
+                              └──────────────────┬──────────────────────────┘
+                    ┌────────────────────────────┼────────────────────────────┐
+              INGEST│                       QUERY│                    EXPLORE  │
+                    ▼                            ▼                             ▼
+   ┌────────────────────────────┐  ┌──────────────────────────────┐  ┌──────────────────┐
+   │ Loader (PDF/TXT/MD/DOCX/   │  │ Hybrid retrieval             │  │ /graph/{cid}/full │
+   │ HTML/URL) → Chunker        │  │  • BM25 (rank-bm25)   0.35   │  │ /query-path       │
+   │        ↓                   │  │  • FAISS bge-large    0.40   │  │ /entity/{name}    │
+   │ Extraction (2-stage)       │  │  • Neo4j PPR graph    0.25   │  │ /stats            │
+   │  • spaCy en_core_web_sm    │  │  BGE-aware relevance floors  │  └──────────────────┘
+   │  • qwen3.5:4b (JSON,       │  │        ↓                     │
+   │    budgeted 8 chunks)      │  │ Scoring + calibration + trust│
+   │        ↓                   │  │        ↓                     │
+   │ Stores (all corpus-scoped) │  │ qwen3.5:4b draft answer      │
+   │  • Neo4j AuraDB (entities, │  │        ↓                     │
+   │    relations, chunks)      │  │ deepseek-r1:8b VERIFICATION  │
+   │    + EntityResolver dedup  │  │  (re-reads evidence, confirms│
+   │  • FAISS 1024-dim + BM25   │  │   /corrects/abstains; draft  │
+   │  • NetworkX (viz backbone) │  │   kept on timeout)           │
+   └────────────────────────────┘  │        ↓                     │
+                                   │ Answer + confidence +        │
+                                   │ provenance + failure_type    │
+                                   └──────────────────────────────┘
 ```
 
-Smoke checks:
-- `GET http://localhost:8000/health`
-- `POST /ingest` `{"file_paths": [], "urls": ["https://en.wikipedia.org/wiki/Artificial_intelligence"]}`
-- `POST /query` `{"question": "What is artificial intelligence?", "top_k": 5}`
+Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → BM25+FAISS; no embedding model → TF-IDF; verification timeout → unverified draft.
 
-Useful env toggles (all optional): `GRAPHRAG_LLM_ENABLED=false` (extractive only), `GRAPHRAG_LLM_EXTRACTION=0` (spaCy-only extraction), `GRAPHRAG_LLM_EXTRACTION_MAX_CHUNKS=20` (deeper relation extraction).
+## 2. Models Used and Why
 
-## What still needs to be done / next steps
+| Model | Role | Why |
+|---|---|---|
+| **BAAI/bge-large-en-v1.5** (1024-dim) | Semantic retrieval embeddings | Top-tier MTEB English retrieval model; measured on-topic/off-topic cosine separation 0.68–0.85 vs 0.21–0.36. Query-side instruction prefix applied automatically. |
+| **spaCy en_core_web_sm** | Stage-1 NER (every chunk, every query) | Millisecond-fast statistical NER for PERSON/ORG/GPE/DATE/PRODUCT; keeps query-time entity extraction LLM-free. |
+| **qwen3.5:4b** (Ollama) | Stage-2 extraction + answer drafts | Markedly better structured-JSON compliance than qwen2.5:3b (Apple/Beats test: 5 typed relationships with descriptions vs 3 bare ones); `think=false` keeps latency bounded. |
+| **deepseek-r1:8b** (Ollama) | Final-answer reasoning verifier | Reasoning-class model re-reads evidence and confirms/corrects/abstains — demonstrated live refinement of a draft (E2E v2 query 1). Strictly additive: any failure returns the draft. |
 
-1. **Merge**: open a PR from `feat/production-upgrade` → `main` after review.
-2. **Deployment (Render + Vercel)**:
-   - The heavy stack (torch/sentence-transformers/faiss/spacy) does NOT fit Vercel's Python serverless runtime. Split: keep the React frontend on Vercel; deploy the FastAPI backend to Render (Docker or native Python service) with `NEO4J_*` env vars set in Render's dashboard.
-   - Ollama is localhost-only — on Render either (a) set `GRAPHRAG_LLM_ENABLED=false` (extractive answers still work), (b) point `OLLAMA_BASE_URL` at a hosted inference endpoint, or (c) switch generation to `ANTHROPIC_API_KEY` (client already implemented).
-   - Add a `render.yaml` + backend `requirements-server.txt` including torch/faiss/spacy/sentence-transformers (root `requirements.txt` is Vercel-scoped — do not add heavy deps there).
-   - Point the frontend's API base URL at the Render service and add the Vercel domain to `GRAPHRAG_CORS_ORIGINS`.
-3. **Quality follow-ups**: raise LLM extraction budget for richer relation graphs; entity-aware reranking for "who" questions; consider `neo4j` vector index as an alternative to local FAISS for multi-instance deployments; rotate the Neo4j password before any public deployment (it was shared in a chat session).
-4. **Housekeeping**: `data/graph_versions/`, `data/outputs/` committed runtime artifacts could be gitignored to slim the repo.
+## 3. How to Run Locally (from scratch)
+
+Prerequisites: **Python 3.12**, **Node 18+**, **Ollama** (`ollama pull qwen3.5:4b && ollama pull deepseek-r1:8b`), a **Neo4j AuraDB** instance (free tier works).
+
+```powershell
+git clone https://github.com/saurabhshreni-cmyk/GraphRAG-Plus.git
+cd GraphRAG-Plus
+python -m venv venv
+.\venv\Scripts\pip install spacy sentence-transformers faiss-cpu rank-bm25 neo4j pydantic pydantic-settings python-dotenv pypdf beautifulsoup4 httpx ollama fastapi uvicorn numpy scikit-learn prometheus-client networkx python-dateutil python-docx python-multipart
+.\venv\Scripts\python -m spacy download en_core_web_sm
+```
+
+Create `.env` in the project root (see `graphrag_plus/.env.example` for every knob):
+```
+NEO4J_URI=neo4j+s://<instance>.databases.neo4j.io
+NEO4J_USERNAME=<user>
+NEO4J_PASSWORD=<password>
+OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_BASE_URL=http://localhost:11434
+EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+GRAPHRAG_VERIFIER_TIMEOUT_S=150   # laptop-class hardware
+OLLAMA_TIMEOUT_S=90
+```
+
+Run:
+```powershell
+# backend (first run downloads bge-large ~1.3 GB)
+.\venv\Scripts\python.exe -m uvicorn graphrag_plus.app.api.main:app --port 8000
+# frontend (second terminal)
+cd frontend && npm install && npm run dev     # http://localhost:5173
+```
+
+## 4. How to Deploy
+
+**Frontend → Vercel**: deploy `frontend/`; set `VITE_API_BASE` to the backend URL. (`vercel.json` / `api/index.py` remain the existing lightweight serverless deployment — untouched.)
+
+**Backend → Render.com** (Python web service):
+- Build: install the dependency list above; Start: `python -m uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`.
+- Set `NEO4J_*` env vars in the Render dashboard (never commit them).
+- **Ollama does not run on Render's free tier** → set `GRAPHRAG_LLM_ENABLED=false` (extractive answers, still evidence-grounded) or point `OLLAMA_BASE_URL` at hosted inference / set `ANTHROPIC_API_KEY` (client built in).
+- bge-large needs ~2 GB RAM — use a paid instance, or set `EMBEDDING_MODEL=all-MiniLM-L6-v2` for small instances (FAISS dimension adapts automatically).
+- Add the Vercel domain to `GRAPHRAG_CORS_ORIGINS`.
+
+## 5. Demo Script (5–7 minutes)
+
+1. **Open the UI** — point out corpus isolation dropdown and health badge.
+2. **Drag-drop a PDF** (or paste the Wikipedia Knowledge-graph URL) → stages animate → "93 entities · 22 relations" toast. Say: *"Extraction is two-stage: spaCy NER plus a local qwen3.5 LLM emitting strictly-validated JSON."*
+3. **Show the graph** — typed colors, filter buttons, search box. Click "Google" → side panel shows Neo4j neighbours + source chunks. Say: *"Every node is deduplicated — 'Apple', 'Apple Inc' and 'Apple Incorporated' merge into one canonical entity via string + embedding similarity."*
+4. **Ask "What is a knowledge graph?"** — traversed nodes pulse red (Personalized PageRank seeds). Answer arrives with confidence bar, BM25/Semantic/Graph pills, and the gold **"Verified by DeepSeek R1"** badge. Expand *"What DeepSeek R1 checked."* Say: *"A reasoning model re-reads the evidence and either confirms, corrects, or abstains — in our E2E run it actually refined the draft."*
+5. **Ask "What is the capital of France?"** — system abstains with NO_EVIDENCE. Say: *"It refuses to hallucinate: measured BGE relevance floors gate off-topic queries."*
+6. Close on the architecture diagram (section 1).
+
+## 6. API Endpoints
+
+| Endpoint | Method | Purpose | Example |
+|---|---|---|---|
+| `/health` | GET | Liveness + LLM flag | → `{"status":"ok","llm_enabled":true,...}` |
+| `/ingest` | POST | Ingest paths/URLs | `{"urls":["https://en.wikipedia.org/wiki/Knowledge_graph"],"new_corpus":true}` → chunks/entities/relations counts |
+| `/ingest/file` | POST | Multipart upload (PDF/TXT/MD/DOCX/HTML) | form: `file`, optional `corpus_id`, `corpus_name` → `{"job_id","corpus_id","status":"completed",...}` |
+| `/query` | POST | Ask a question | `{"question":"…","top_k":5,"corpus_id":"corpus_x"}` → answer, confidence, evidence w/ raw signal scores, `verified_by_reasoning`, `reasoning_summary`, `answer_changed_by_reasoning`, `failure_type` |
+| `/corpora` · `/corpora/active` · `/corpora/{id}/select` · `/corpora/{id}` (DELETE) | — | Corpus management (delete also clears the Neo4j partition) | |
+| `/corpora/{id}/chunks` | GET | Paginated chunk listing | `?page=1&page_size=20` |
+| `/graph` · `/graph/{node_id}` | GET | Legacy NetworkX viz snapshot / neighborhood | |
+| `/graph/{cid}/full` | GET | Neo4j graph (≤500 nodes by degree) | → `{nodes, edges, stats}` |
+| `/graph/{cid}/query-path?q=` | GET | Nodes/edges a query traverses (spaCy-only, fast) | |
+| `/graph/{cid}/entity/{name}` | GET | Entity metadata + neighbours + chunks | |
+| `/graph/{cid}/stats` | GET | Type histograms, top-10 connected entities | |
+| `/metrics` | GET | Prometheus metrics | |
+
+## 7. Known Limitations
+
+- **Model co-residency**: qwen3.5:4b + deepseek-r1:8b don't fit together in 16 GB RAM — draft→verify pays a model swap; R1 occasionally exceeds even the 150 s budget (drafts are kept, flagged unverified). A 24 GB+ machine or hosted inference removes this.
+- **LLM extraction is budgeted** (8 chunks/ingest by default) — relations are sparse on long documents; raise `GRAPHRAG_LLM_EXTRACTION_MAX_CHUNKS` at ~60-90 s/chunk.
+- **Entity resolution canonical-name choice** is "longest wins", which occasionally picks awkward canonicals ("Microsoft Research's" over "Microsoft").
+- Verification runs only on LLM drafts, not extractive answers (by design — extractive output is already evidence-bound).
+- PPR loads the corpus entity graph into Python per query; fine to ~10k entities, needs Neo4j GDS beyond that.
+- Wikipedia loader extracts the article's lead sections (~8 k chars), not the full page.
+
+## 8. What Makes This Different From Vanilla RAG (interview talking points)
+
+1. **Three-signal hybrid retrieval** — BM25 + 1024-dim bge-large FAISS + knowledge-graph traversal, with measured, backend-aware relevance floors (not folklore thresholds).
+2. **A real knowledge graph in Neo4j** — typed entities/relations extracted by a local LLM into strictly-validated Pydantic JSON, corpus-isolated, browsable through the API and UI.
+3. **Entity resolution** — the classic production GraphRAG killer (duplicate nodes) handled with a 3-pass merger (string similarity, token-prefix containment, embedding similarity) over union-find clusters, executed in-database.
+4. **Personalized PageRank retrieval** — research-grade graph signal (50 weighted chunks vs 1 from naive 2-hop on the same query in our measurements).
+5. **Reasoning-verified answers** — a second, reasoning-class model (DeepSeek R1) audits every LLM answer against the evidence before the user sees it, with full provenance surfaced in the UI.
+6. **Honest failure semantics** — NO_EVIDENCE abstention, LLM-failure fallbacks, calibrated confidence, trust scores, contradiction detection: the system says "I don't know" instead of hallucinating.
+7. **Local-first and free** — every model runs on a laptop via Ollama + HuggingFace; the only cloud dependency (Neo4j Aura) has a free tier.
+
+---
+
+*Upgrade history: see git log (`feat/production-upgrade` branch, 18 commits) — session v1 built the spaCy/Ollama/Neo4j/FAISS foundation; session v2 upgraded models (bge-large, qwen3.5), added DeepSeek R1 verification, entity resolution, PPR, 6 API endpoints, and the frontend showcase.*
