@@ -729,6 +729,10 @@ class GraphRAGPipeline:
 
     @staticmethod
     def _evidence_from(item: dict[str, Any]) -> EvidenceItem:
+        def _opt(key: str) -> float | None:
+            value = item.get(key)
+            return float(value) if isinstance(value, (int | float)) else None
+
         return EvidenceItem(
             id=item["id"],
             source_id=item["source_id"],
@@ -740,6 +744,9 @@ class GraphRAGPipeline:
             trust_score=float(item["trust_score"]),
             uncertainty_penalty=float(item["uncertainty_penalty"]),
             final_score=float(item["final_score"]),
+            raw_bm25=_opt("raw_bm25"),
+            raw_semantic=_opt("raw_cosine"),
+            raw_graph=_opt("raw_graph"),
         )
 
     def _collect_conflicts(

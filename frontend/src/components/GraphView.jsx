@@ -1,17 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { motion } from "framer-motion";
+import { api } from "../api.js";
 
-const NODE_PALETTE = {
-  Document: "#7aa7ff",
-  Chunk: "#9aa6b8",
-  Entity: "#ffd166",
-  Concept: "#f78fb3",
-  Phrase: "#c4b5fd",
-  Person: "#06d6a0",
-  Organization: "#ef476f",
-  default: "#9aa6b8",
+// Canonical entity-type palette (uppercase keys; lookup is case-insensitive
+// so both the Neo4j types "PERSON" and legacy graph types "Person" match).
+const TYPE_PALETTE = {
+  PERSON: "#3B82F6",
+  ORG: "#F97316",
+  ORGANIZATION: "#F97316",
+  LOCATION: "#22C55E",
+  CONCEPT: "#A855F7",
+  TECHNOLOGY: "#14B8A6",
+  DATE: "#EAB308",
+  CHUNK: "#6B7280",
+  DOCUMENT: "#7aa7ff",
+  ENTITY: "#ffd166",
+  PHRASE: "#c4b5fd",
+  OTHER: "#9aa6b8",
+  DEFAULT: "#9aa6b8",
 };
+
+// Query-path highlight color (retrieval trace).
+const HIGHLIGHT_COLOR = "#EF4444";
+
+function colorForType(type) {
+  return TYPE_PALETTE[String(type || "").toUpperCase()] || TYPE_PALETTE.DEFAULT;
+}
 
 const EDGE_PALETTE = {
   contains: "rgba(122,167,255,0.45)",
@@ -23,11 +38,12 @@ const EDGE_PALETTE = {
 };
 
 const LEGEND = [
-  ["Document", NODE_PALETTE.Document],
-  ["Chunk", NODE_PALETTE.Chunk],
-  ["Entity", NODE_PALETTE.Entity],
-  ["Concept", NODE_PALETTE.Concept],
-  ["Phrase", NODE_PALETTE.Phrase],
+  ["Person", TYPE_PALETTE.PERSON],
+  ["Org", TYPE_PALETTE.ORG],
+  ["Location", TYPE_PALETTE.LOCATION],
+  ["Concept", TYPE_PALETTE.CONCEPT],
+  ["Tech", TYPE_PALETTE.TECHNOLOGY],
+  ["Date", TYPE_PALETTE.DATE],
 ];
 
 // Node radius is scaled by degree so high-degree nodes (the most connected
@@ -46,23 +62,31 @@ export default function GraphView({
   theme,
   mode = "important",
   onModeChange,
+  corpusId = null,
 }) {
   const fgRef = useRef(null);
   const containerRef = useRef(null);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [entityDetails, setEntityDetails] = useState(null);
+  const [typeFilter, setTypeFilter] = useState(new Set()); // empty = show all
+  const [search, setSearch] = useState("");
 
   // Convert backend snapshot to react-force-graph shape, including degree.
   const data = useMemo(() => {
-    if (!snapshot) return { nodes: [], links: [], maxDegree: 0 };
-    const nodes = (snapshot.nodes || []).map((n) => ({
+    if (!snapshot) return { nodes: [], links: [], maxDegree: 0, types: [] };
+    let nodes = (snapshot.nodes || []).map((n) => ({
       id: n.id,
       label: n.label || n.id,
       type: n.node_type || "default",
       degree: n.degree || 0,
       raw: n,
     }));
+    const types = [...new Set(nodes.map((n) => String(n.type).toUpperCase()))].sort();
+    if (typeFilter.size > 0) {
+      nodes = nodes.filter((n) => typeFilter.has(String(n.type).toUpperCase()));
+    }
     const ids = new Set(nodes.map((n) => n.id));
     const links = (snapshot.edges || [])
       .filter((e) => ids.has(e.source) && ids.has(e.target))
@@ -74,8 +98,37 @@ export default function GraphView({
         raw: e,
       }));
     const maxDegree = nodes.reduce((m, n) => Math.max(m, n.degree), 0);
-    return { nodes, links, maxDegree };
-  }, [snapshot]);
+    return { nodes, links, maxDegree, types };
+  }, [snapshot, typeFilter]);
+
+  // Nodes matching the search box get the same visual boost as highlights.
+  const searchMatches = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return new Set();
+    return new Set(
+      data.nodes
+        .filter((n) => String(n.label).toLowerCase().includes(q))
+        .map((n) => n.id),
+    );
+  }, [search, data.nodes]);
+
+  // Fetch Neo4j-side entity details (neighbours + source chunks) on select.
+  useEffect(() => {
+    setEntityDetails(null);
+    if (!selected || !corpusId) return;
+    const name = String(selected.label || "").trim();
+    if (!name || String(selected.type).toUpperCase() === "CHUNK") return;
+    let cancelled = false;
+    api
+      .entityDetails(corpusId, name)
+      .then((d) => {
+        if (!cancelled) setEntityDetails(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, corpusId]);
 
   // Connected-node lookup so hover highlights an entire neighborhood.
   const adjacency = useMemo(() => {
@@ -138,7 +191,7 @@ export default function GraphView({
 
   const isLight = theme === "light";
   const labelColor = isLight ? "#171b28" : "#e6ebf2";
-  const isHighlighted = (id) => highlightSet.has(id);
+  const isHighlighted = (id) => highlightSet.has(id) || searchMatches.has(id);
   const isInHoverHood = (id) => hoverNeighborhood.has(id);
 
   return (
@@ -154,9 +207,9 @@ export default function GraphView({
             Knowledge graph
           </h2>
           <p className="text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500">
-            {data.nodes.length} nodes · {data.links.length} edges ·{" "}
-            {mode === "important" ? "top by degree" : "full graph"} · scroll to
-            zoom · drag to pan
+            Total Nodes: {data.nodes.length} · Relationships: {data.links.length} ·
+            Entity Types: {data.types.length} ·{" "}
+            {mode === "important" ? "top by degree" : "full graph"}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -175,6 +228,58 @@ export default function GraphView({
           <Legend />
         </div>
       </header>
+
+      {/* Filter + search bar */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-5 py-2 [html:not(.dark)_&]:border-ink-200">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search nodes…"
+          className="w-40 rounded-md border border-white/5 bg-ink-900/40 px-2 py-1 text-[11px]
+                     text-ink-100 placeholder:text-ink-500 focus:border-accent-500 focus:outline-none
+                     [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white
+                     [html:not(.dark)_&]:text-ink-900"
+        />
+        {data.types.map((t) => {
+          const active = typeFilter.size === 0 || typeFilter.has(t);
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() =>
+                setTypeFilter((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(t)) next.delete(t);
+                  else next.add(t);
+                  return next;
+                })
+              }
+              className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider transition-all ${
+                active
+                  ? "border-white/10 text-ink-200 [html:not(.dark)_&]:text-ink-700 [html:not(.dark)_&]:border-ink-300"
+                  : "border-white/5 text-ink-600 opacity-40"
+              }`}
+              title={`Toggle ${t} nodes`}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: colorForType(t) }}
+              />
+              {t.toLowerCase()}
+            </button>
+          );
+        })}
+        {typeFilter.size > 0 && (
+          <button
+            type="button"
+            onClick={() => setTypeFilter(new Set())}
+            className="text-[10px] uppercase tracking-wider text-accent-400 hover:text-accent-300"
+          >
+            clear filter
+          </button>
+        )}
+      </div>
 
       <div ref={containerRef} className="relative flex-1">
         {data.nodes.length === 0 ? (
@@ -239,9 +344,12 @@ export default function GraphView({
               ctx.textBaseline = "middle";
               ctx.fillText(label, midX, midY);
             }}
+            autoPauseRedraw={false}
             nodeCanvasObject={(node, ctx, globalScale) => {
-              const color = NODE_PALETTE[node.type] || NODE_PALETTE.default;
-              const isHi = highlightSet.has(node.id);
+              const baseColor = colorForType(node.type);
+              const isHi = isHighlighted(node.id);
+              // Query-path / search hits render in red with a pulsing halo.
+              const color = isHi ? HIGHLIGHT_COLOR : baseColor;
               const isHover = hovered?.id === node.id;
               const isSel = selected?.id === node.id;
               const inHood = isInHoverHood(node.id) && !isHover;
@@ -257,11 +365,17 @@ export default function GraphView({
                       ? baseR * 1.05
                       : baseR;
 
-              // Soft halo for prominent / highlighted / selected nodes.
+              // Soft halo for prominent / highlighted / selected nodes; the
+              // query-path highlight pulses (time-driven alpha).
               if (isHi || isHover || isSel) {
+                const pulse = isHi
+                  ? 0.5 + 0.5 * Math.sin(Date.now() / 300)
+                  : 1;
                 ctx.beginPath();
-                ctx.arc(node.x, node.y, r + 6, 0, 2 * Math.PI);
-                ctx.fillStyle = `${color}22`;
+                ctx.arc(node.x, node.y, r + 4 + (isHi ? pulse * 4 : 2), 0, 2 * Math.PI);
+                ctx.fillStyle = isHi
+                  ? `rgba(239,68,68,${0.12 + pulse * 0.18})`
+                  : `${color}22`;
                 ctx.fill();
               }
 
@@ -335,9 +449,7 @@ export default function GraphView({
             <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-ink-400">
               <span
                 className="h-2 w-2 rounded-full"
-                style={{
-                  background: NODE_PALETTE[hovered.type] || NODE_PALETTE.default,
-                }}
+                style={{ background: colorForType(hovered.type) }}
               />
               {hovered.type} · degree {hovered.degree || 0}
             </div>
@@ -364,10 +476,7 @@ export default function GraphView({
               <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-ink-400">
                 <span
                   className="h-2 w-2 rounded-full"
-                  style={{
-                    background:
-                      NODE_PALETTE[selected.type] || NODE_PALETTE.default,
-                  }}
+                  style={{ background: colorForType(selected.type) }}
                 />
                 {selected.type}
               </div>
@@ -394,6 +503,40 @@ export default function GraphView({
                 {adjacency.get(selected.id)?.size ?? 0}
               </span>
             </div>
+
+            {/* Neo4j-side details: description, neighbours, source chunks */}
+            {entityDetails?.entity?.description && (
+              <p className="mt-2 max-w-[240px] text-[11px] leading-snug text-ink-300 [html:not(.dark)_&]:text-ink-600">
+                {entityDetails.entity.description}
+              </p>
+            )}
+            {!!entityDetails?.neighbors?.length && (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wider text-ink-500">
+                  Related entities
+                </div>
+                <ul className="thin-scroll mt-1 max-h-24 space-y-0.5 overflow-auto text-[11px]">
+                  {entityDetails.neighbors.slice(0, 8).map((n, i) => (
+                    <li key={`${n.name}-${i}`} className="flex items-center gap-1.5">
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{ background: colorForType(n.type) }}
+                      />
+                      <span className="truncate">{n.name}</span>
+                      <span className="shrink-0 font-mono text-[9px] text-ink-500">
+                        {n.direction === "out" ? "→" : "←"} {n.relation}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!entityDetails?.chunks?.length && (
+              <div className="mt-2 text-[10px] uppercase tracking-wider text-ink-500">
+                Mentioned in {entityDetails.chunks.length} chunk
+                {entityDetails.chunks.length === 1 ? "" : "s"}
+              </div>
+            )}
           </motion.div>
         )}
       </div>

@@ -21,7 +21,27 @@ const TONE_CLASSES = {
   sky: "border-sky-400/30 bg-sky-500/10 text-sky-200",
   emerald: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
   accent: "border-accent-400/30 bg-accent-500/10 text-accent-400",
+  gold: "border-yellow-400/40 bg-yellow-500/10 text-yellow-200 [html:not(.dark)_&]:text-yellow-700",
 };
+
+const SIGNAL_STYLES = {
+  BM25: "border-sky-400/30 bg-sky-500/10 text-sky-300 [html:not(.dark)_&]:text-sky-700",
+  Semantic:
+    "border-violet-400/30 bg-violet-500/10 text-violet-300 [html:not(.dark)_&]:text-violet-700",
+  Graph:
+    "border-emerald-400/30 bg-emerald-500/10 text-emerald-300 [html:not(.dark)_&]:text-emerald-700",
+};
+
+// Which retrieval signals contributed, derived from per-evidence raw scores.
+function firedSignals(result) {
+  const evidence = result?.evidence || [];
+  const fired = [];
+  if (evidence.some((e) => (e.raw_bm25 ?? 0) > 0)) fired.push("BM25");
+  if (evidence.some((e) => (e.raw_semantic ?? 0) > 0)) fired.push("Semantic");
+  if (evidence.some((e) => (e.raw_graph ?? e.graph_score ?? 0) > 0))
+    fired.push("Graph");
+  return fired;
+}
 
 export default function ResultCard({ result, busy, onEvidenceHover }) {
   const [copied, setCopied] = useState(false);
@@ -119,37 +139,57 @@ export default function ResultCard({ result, busy, onEvidenceHover }) {
               error={result.calibration_error}
             />
 
+            {/* Signal pills + DeepSeek R1 verification badges */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {firedSignals(result).map((signal) => (
+                <span
+                  key={signal}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${SIGNAL_STYLES[signal]}`}
+                  title={`${signal} retrieval signal contributed to this answer`}
+                >
+                  {signal}
+                </span>
+              ))}
+              {result.verified_by_reasoning && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${TONE_CLASSES.gold}`}
+                  title="DeepSeek R1 re-read the evidence and confirmed this answer"
+                >
+                  <ShieldIcon />
+                  Verified by DeepSeek R1
+                </span>
+              )}
+            </div>
+            {result.answer_changed_by_reasoning && (
+              <p className="text-[11px] italic text-yellow-300/90 [html:not(.dark)_&]:text-yellow-700">
+                Answer refined by reasoning — DeepSeek R1 corrected the draft
+                against the evidence.
+              </p>
+            )}
+            {result.verified_by_reasoning && result.reasoning_summary && (
+              <Collapsible title="What DeepSeek R1 checked">
+                <p className="text-[11px] leading-relaxed text-ink-300 [html:not(.dark)_&]:text-ink-600">
+                  {result.reasoning_summary}
+                </p>
+              </Collapsible>
+            )}
+
             {!!result.evidence?.length && (
               <div>
                 <h3 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-ink-400">
-                  Evidence
+                  Evidence · {result.evidence.length} chunk
+                  {result.evidence.length === 1 ? "" : "s"}
                   <span className="text-ink-500/70 text-[10px] normal-case tracking-normal">
-                    (hover to highlight in graph)
+                    (hover to highlight · click to expand)
                   </span>
                 </h3>
                 <ul className="thin-scroll max-h-56 space-y-2 overflow-auto pr-1">
                   {result.evidence.map((ev) => (
-                    <li
+                    <EvidenceItem
                       key={ev.id}
-                      onMouseEnter={() => onEvidenceHover?.([ev.id, ev.source_id])}
-                      onMouseLeave={() => onEvidenceHover?.([])}
-                      className="cursor-default rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs leading-relaxed
-                                 transition-all hover:border-accent-500/40 hover:bg-accent-500/[0.05]
-                                 [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white"
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-ink-400">
-                        <span className="truncate font-mono">{ev.source_id}</span>
-                        <span className="shrink-0">
-                          score{" "}
-                          <span className="text-accent-400">
-                            {ev.final_score.toFixed(2)}
-                          </span>
-                        </span>
-                      </div>
-                      <p className="text-ink-200 [html:not(.dark)_&]:text-ink-700">
-                        {ev.snippet}
-                      </p>
-                    </li>
+                      ev={ev}
+                      onEvidenceHover={onEvidenceHover}
+                    />
                   ))}
                 </ul>
               </div>
@@ -173,6 +213,71 @@ export default function ResultCard({ result, busy, onEvidenceHover }) {
         )}
       </AnimatePresence>
     </motion.section>
+  );
+}
+
+function EvidenceItem({ ev, onEvidenceHover }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasFull = !!ev.full_text && ev.full_text.length > (ev.snippet || "").length;
+  return (
+    <li
+      onMouseEnter={() => onEvidenceHover?.([ev.id, ev.source_id])}
+      onMouseLeave={() => onEvidenceHover?.([])}
+      onClick={() => hasFull && setExpanded((v) => !v)}
+      className={`rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs leading-relaxed
+                 transition-all hover:border-accent-500/40 hover:bg-accent-500/[0.05]
+                 [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white ${
+                   hasFull ? "cursor-pointer" : "cursor-default"
+                 }`}
+    >
+      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-ink-400">
+        <span className="truncate font-mono">{ev.source_id}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span>
+            score <span className="text-accent-400">{ev.final_score.toFixed(2)}</span>
+          </span>
+          {hasFull && (
+            <span className="text-ink-500">{expanded ? "▾" : "▸"}</span>
+          )}
+        </span>
+      </div>
+      <p className="text-ink-200 [html:not(.dark)_&]:text-ink-700">
+        {expanded ? ev.full_text : ev.snippet}
+      </p>
+    </li>
+  );
+}
+
+function Collapsible({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-white/5 bg-white/[0.02] [html:not(.dark)_&]:border-ink-200">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-3 py-2 text-left text-[11px] font-medium
+                   uppercase tracking-wider text-ink-400 hover:text-ink-100
+                   [html:not(.dark)_&]:hover:text-ink-900"
+      >
+        {title}
+        <span>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div className="px-3 pb-3">{children}</div>}
+    </div>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
+      <path
+        d="M6 1l4 1.5v3c0 2.5-1.7 4.3-4 5-2.3-.7-4-2.5-4-5v-3L6 1z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M4.2 6l1.3 1.3 2.3-2.6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

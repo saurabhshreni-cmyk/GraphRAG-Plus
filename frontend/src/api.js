@@ -95,6 +95,48 @@ export const api = {
     if (corpusId) params.set("corpus_id", corpusId);
     return request(`/graph?${params.toString()}`);
   },
+  // Multipart file upload (PDF / TXT / MD / DOCX / HTML). Content-Type is
+  // set by the browser (multipart boundary), so bypass the JSON default.
+  ingestFile: async ({ file, corpusId = null, corpusName = null }) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (corpusId) form.append("corpus_id", corpusId);
+    if (corpusName) form.append("corpus_name", corpusName);
+    const url = `${BASE}/ingest/file`;
+    let response;
+    try {
+      response = await fetch(url, { method: "POST", body: form });
+    } catch (err) {
+      throw new ApiError(`Network error contacting ${url}: ${err.message}`);
+    }
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = (data && (data.detail || data.message)) || response.statusText;
+      throw new ApiError(`${response.status} ${detail}`, {
+        status: response.status,
+        body: data,
+      });
+    }
+    return data;
+  },
+  graphFull: (corpusId, maxNodes = 500) =>
+    request(
+      `/graph/${encodeURIComponent(corpusId)}/full?max_nodes=${maxNodes}`,
+    ),
+  graphStats: (corpusId) =>
+    request(`/graph/${encodeURIComponent(corpusId)}/stats`),
+  queryPath: (corpusId, q) =>
+    request(
+      `/graph/${encodeURIComponent(corpusId)}/query-path?q=${encodeURIComponent(q)}`,
+    ),
+  entityDetails: (corpusId, entityName) =>
+    request(
+      `/graph/${encodeURIComponent(corpusId)}/entity/${encodeURIComponent(entityName)}`,
+    ),
+  corpusChunks: (corpusId, page = 1, pageSize = 20) =>
+    request(
+      `/corpora/${encodeURIComponent(corpusId)}/chunks?page=${page}&page_size=${pageSize}`,
+    ),
   corpora: () => request("/corpora"),
   activeCorpus: () => request("/corpora/active"),
   selectCorpus: (corpusId) =>
