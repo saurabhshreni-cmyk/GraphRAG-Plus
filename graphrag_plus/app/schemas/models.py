@@ -94,6 +94,11 @@ class EvidenceItem(BaseModel):
     trust_score: float
     uncertainty_penalty: float
     final_score: float
+    # Raw per-signal scores (BM25 / FAISS semantic / graph) so the UI can
+    # show which retrieval signals actually fired for this chunk.
+    raw_bm25: float | None = None
+    raw_semantic: float | None = None
+    raw_graph: float | None = None
 
 
 class ContradictionItem(BaseModel):
@@ -135,6 +140,10 @@ class QueryResponse(BaseModel):
     corpus_id: str | None = None
     corpus_name: str | None = None
     corpus_domain: str | None = None
+    # DeepSeek R1 reasoning-verification metadata (final answer quality gate).
+    verified_by_reasoning: bool = False
+    reasoning_summary: str = ""
+    answer_changed_by_reasoning: bool = False
 
 
 class GraphResponse(BaseModel):

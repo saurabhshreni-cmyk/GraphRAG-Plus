@@ -28,8 +28,16 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from graphrag_plus.app.generation.generator import LLM_ABSTAIN_TOKEN, LLMClient
+from dotenv import load_dotenv
+
+from graphrag_plus.app.generation.generator import (
+    LLM_ABSTAIN_TOKEN,
+    LLM_ABSTAIN_TOKEN_ALT,
+    LLMClient,
+)
 from graphrag_plus.app.utils.logging_utils import get_logger
+
+load_dotenv()  # pick up OLLAMA_MODEL / OLLAMA_BASE_URL from the project .env
 
 logger = get_logger(__name__)
 
@@ -37,10 +45,15 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL_DEFAULT = "claude-3-5-haiku-latest"
 ANTHROPIC_VERSION = "2023-06-01"
 
-OLLAMA_URL_DEFAULT = "http://localhost:11434/api/generate"
-# Default to qwen3.5:4b — fits in less RAM than gemma4:e2b and reloads
-# reliably on memory-constrained hosts. Override with OLLAMA_MODEL.
+# Base URL comes from OLLAMA_BASE_URL (.env); OLLAMA_URL may override the
+# full generate endpoint directly.
+OLLAMA_BASE_URL_DEFAULT = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_URL_DEFAULT = f"{OLLAMA_BASE_URL_DEFAULT}/api/generate"
 OLLAMA_MODEL_DEFAULT = "qwen3.5:4b"
+# Default 30s; env-tunable because on RAM-constrained hosts the answer
+# model gets evicted whenever the reasoning verifier runs, and the reload
+# alone can eat the whole budget. On timeout we fall back to extractive.
+OLLAMA_TIMEOUT_S_DEFAULT = float(os.environ.get("OLLAMA_TIMEOUT_S", "30"))
 
 _SYSTEM_PROMPT = (
     "You are GraphRAG++'s answer composer. Answer the user's question using "
@@ -50,19 +63,14 @@ _SYSTEM_PROMPT = (
 )
 
 _OLLAMA_PROMPT_TEMPLATE = (
-    "You are answering based ONLY on the provided evidence.\n\n"
-    "EVIDENCE:\n{context}\n\n"
-    "QUESTION:\n{question}\n\n"
-    "INSTRUCTIONS:\n"
-    "- Answer in 2-4 sentences maximum\n"
-    "- Start with a direct definition\n"
-    "- Use simple and clear language\n"
-    "- Do NOT include unrelated information\n"
-    "- Do NOT repeat sentences\n"
-    "- Do NOT hallucinate\n"
-    "- If the answer is not in the evidence, say: "
-    "'I cannot answer based on the provided context.'\n\n"
-    "ANSWER:"
+    "You are a precise question-answering assistant.\n"
+    "Answer the question using ONLY the context provided.\n"
+    "If the answer is not in the context, say "
+    '"I don\'t have enough information to answer this."\n'
+    "Be concise and accurate.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}\n\n"
+    "Answer:"
 )
 
 # Caps for post-processing.
@@ -217,7 +225,7 @@ class LocalLLMClient:
         *,
         url: str | None = None,
         model: str = OLLAMA_MODEL_DEFAULT,
-        timeout_s: float = 60.0,
+        timeout_s: float = OLLAMA_TIMEOUT_S_DEFAULT,
         max_context_chars: int = 4000,
     ):
         self.url = url or os.environ.get("OLLAMA_URL", OLLAMA_URL_DEFAULT)
@@ -322,6 +330,7 @@ def build_default_llm_client(*, llm_enabled: bool) -> LLMClient | None:
 
 __all__ = [
     "LLM_ABSTAIN_TOKEN",
+    "LLM_ABSTAIN_TOKEN_ALT",
     "AnthropicClient",
     "EchoClient",
     "LLMClient",

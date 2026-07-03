@@ -156,11 +156,26 @@ export default function App() {
     [refreshCorpora, refreshGraph],
   );
 
+  const [queryPathHighlights, setQueryPathHighlights] = useState([]);
+
   const handleAsk = useCallback(
     async (question) => {
       setBusy(true);
       setResult(null);
       setEvidenceHighlights([]);
+      setQueryPathHighlights([]);
+      // Fire-and-forget: fetch which graph nodes this query traverses so the
+      // viz can trace the retrieval path in red. Node ids in the local graph
+      // snapshot are "ent::<lowercased name>".
+      if (activeCorpusId) {
+        api
+          .queryPath(activeCorpusId, question)
+          .then((p) => {
+            const names = [...(p.seed_nodes || []), ...(p.neighbor_nodes || [])];
+            setQueryPathHighlights(names.map((n) => `ent::${String(n).toLowerCase()}`));
+          })
+          .catch(() => {});
+      }
       try {
         const llmEnabled =
           llmMode === "llm" ? true : llmMode === "extractive" ? false : null;
@@ -189,9 +204,13 @@ export default function App() {
 
   const steps = useMemo(() => buildStorySteps(result, snapshot), [result, snapshot]);
 
-  // Combined highlights: evidence-hover takes precedence over reasoning-story.
+  // Combined highlights: evidence-hover > reasoning-story > query-path trace.
   const activeHighlights =
-    evidenceHighlights.length > 0 ? evidenceHighlights : storyHighlights;
+    evidenceHighlights.length > 0
+      ? evidenceHighlights
+      : storyHighlights.length > 0
+        ? storyHighlights
+        : queryPathHighlights;
 
   return (
     <div className="app-shell min-h-screen text-ink-100 [html:not(.dark)_&]:bg-ink-50 [html:not(.dark)_&]:text-ink-900">
@@ -246,6 +265,7 @@ export default function App() {
             theme={theme}
             mode={graphMode}
             onModeChange={setGraphMode}
+            corpusId={activeCorpusId}
           />
         </div>
 

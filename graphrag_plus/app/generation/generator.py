@@ -31,10 +31,11 @@ import re
 from collections import Counter
 from typing import Protocol
 
-# Sentinel string the LLM is instructed to emit when evidence doesn't cover
-# the question. Detecting it lets us fall back to extractive output instead
+# Sentinel strings the LLM is instructed to emit when evidence doesn't cover
+# the question. Detecting them lets us fall back to extractive output instead
 # of returning a verbatim refusal that the user can't act on.
 LLM_ABSTAIN_TOKEN = "I cannot answer based on the provided context."
+LLM_ABSTAIN_TOKEN_ALT = "I don't have enough information to answer this."
 
 # Stopwords used for scoring sentences against the query. Kept in sync with
 # the retrieval service philosophy: we want content overlap, not boilerplate
@@ -779,20 +780,29 @@ class AnswerGenerator:
         return " ".join(top)
 
     # ---------------------------------------------------------------- LLM path
+    # How many evidence chunks feed the LLM prompt. 5 (not 3) because the
+    # answer for aggregate questions ("which companies…") often lives in
+    # rank-4/5 chunks; the client still caps total context characters.
+    _CONTEXT_CHUNKS = 5
+
     @staticmethod
     def _build_context(evidence: list[dict[str, object]]) -> str:
-        """Top-3 strongest chunks, deduped sentence-by-sentence.
+        """Top-N strongest chunks, deduped sentence-by-sentence.
 
         Sorted-by-final-score happens upstream (ScoringModule), so we just
         take the prefix here. We split into sentences so duplicate sentences
         across overlapping chunks (common when ingestion produced
         near-identical paragraphs) don't show up twice in the prompt.
+
+        Uses the chunk's FULL text (the client caps total context length) —
+        the 300-char snippet routinely truncates mid-answer, which made the
+        LLM abstain on questions the evidence could actually answer.
         """
         seen: set[str] = set()
         rendered: list[str] = []
-        for idx, item in enumerate(evidence[:3]):
+        for idx, item in enumerate(evidence[: AnswerGenerator._CONTEXT_CHUNKS]):
             source = str(item.get("source_id", "?"))
-            snippet = str(item.get("snippet", "") or "").strip()
+            snippet = str(item.get("full_text") or item.get("snippet") or "").strip()
             if not snippet:
                 continue
             kept_sentences: list[str] = []
@@ -818,13 +828,16 @@ class AnswerGenerator:
 
     # --------------------------------------------------------- quality filter
     @staticmethod
-    def _llm_answer_passes_quality(question: str, answer: str) -> bool:
-        """Reject LLM output that doesn't share key terms with the question.
+    def _llm_answer_passes_quality(question: str, answer: str, context: str = "") -> bool:
+        """Reject LLM output that is neither question-relevant nor grounded.
 
-        Without this gate a model that drifts off-topic ("Here is a poem
-        about graphs...") would be returned to the user verbatim. We require
-        either at least one shared content token, OR — for very short
-        questions — that the answer be substantive (>= 6 content tokens).
+        Two ways to pass:
+        1. Shares a content token with the question, OR
+        2. Is grounded in the evidence: at least half of the answer's content
+           tokens appear in the context. This admits legitimate entity-list
+           answers ("Google, Microsoft, LinkedIn…") that paraphrase the
+           question entirely, while still rejecting free-associated output
+           whose vocabulary matches neither question nor evidence.
         """
         q_tokens = _tokens(question)
         a_tokens = _tokens(answer)
@@ -832,10 +845,13 @@ class AnswerGenerator:
             return bool(a_tokens)
         if q_tokens & a_tokens:
             return True
-        # If the question has only one content token (e.g. "NetworkX?") and
-        # the answer is substantive, allow it through. The retrieval gate
-        # already enforced that the chunks are on-topic, so the answer is
-        # almost certainly grounded even if it paraphrases the term.
+        if context and a_tokens:
+            c_tokens = _tokens(context)
+            grounded = len(a_tokens & c_tokens)
+            if grounded >= 3 and grounded / len(a_tokens) >= 0.5:
+                return True
+        # Single-content-token questions ("NetworkX?") with a substantive
+        # answer pass — retrieval already enforced topical chunks.
         return len(q_tokens) <= 1 and len(a_tokens) >= 6
 
     # ----------------------------------------------------------------- public
@@ -870,15 +886,15 @@ class AnswerGenerator:
             question, evidence, intent=intent, comparison_terms=comparison_terms
         )
 
-        # Flow (matches the architecture diagram):
-        #     evidence empty             -> abstain, never call LLM (handled above)
-        #     llm_enabled=False          -> extractive
-        #     llm_enabled=True
-        #         confidence >= threshold -> extractive (already strong, save tokens)
-        #         confidence <  threshold -> LLM, with extractive fallback on error
+        # Flow (upgraded — LLM-first):
+        #     evidence empty    -> abstain, never call LLM (handled above)
+        #     llm_enabled=False -> extractive
+        #     llm_enabled=True  -> LLM synthesis, extractive fallback on any
+        #                          error / timeout / abstain / quality reject.
+        # ``confidence`` / ``answer_threshold`` no longer gate the LLM call;
+        # they still drive the failure classifier upstream.
+        _ = confidence, answer_threshold
         if not self.llm_enabled:
-            return extractive, False, False
-        if confidence >= answer_threshold:
             return extractive, False, False
         try:
             llm_answer = self._llm_answer(question, evidence)
@@ -896,16 +912,136 @@ class AnswerGenerator:
         # only runs when len(evidence) > 0), so an abstain means the model
         # disagreed with retrieval. Trust retrieval and fall back to the
         # extractive sentence-rank answer.
-        if LLM_ABSTAIN_TOKEN.lower().rstrip(".") in llm_answer.lower():
-            return extractive, False, True
+        lowered_answer = llm_answer.lower()
+        for abstain in (LLM_ABSTAIN_TOKEN, LLM_ABSTAIN_TOKEN_ALT):
+            if abstain.lower().rstrip(".") in lowered_answer:
+                return extractive, False, True
 
-        # Quality filter: reject completions that drifted off-topic. The
-        # retrieval gates already ensure the chunks share query terms with
-        # the question, so the answer should too.
-        if not self._llm_answer_passes_quality(question, llm_answer):
+        # Quality filter: reject completions that are neither on-topic nor
+        # grounded in the retrieved evidence.
+        if not self._llm_answer_passes_quality(question, llm_answer, self._build_context(evidence)):
             return extractive, False, True
 
         return llm_answer, True, False
+
+    # ------------------------------------------------- reasoning verification
+    _verifier = None  # class-level lazy singleton (shared across corpora)
+
+    @classmethod
+    def _get_verifier(cls):
+        if cls._verifier is None:
+            from graphrag_plus.app.generation.reasoning_verifier import ReasoningVerifier
+
+            cls._verifier = ReasoningVerifier()
+        return cls._verifier
+
+    @staticmethod
+    def _verifier_enabled() -> bool:
+        import os
+
+        return os.environ.get("GRAPHRAG_REASONING_VERIFIER", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+
+    def generate_verified(
+        self,
+        question: str,
+        evidence: list[dict[str, object]],
+        confidence: float,
+        answer_threshold: float,
+        *,
+        intent: str | None = None,
+        comparison_terms: tuple[str, str] | None = None,
+    ) -> tuple[str, bool, bool, object | None]:
+        """:meth:`generate` plus a DeepSeek R1 verification pass on LLM drafts.
+
+        Returns ``(answer, used_llm, llm_failed, verification)`` where
+        ``verification`` is a
+        :class:`~graphrag_plus.app.generation.reasoning_verifier.VerificationResult`
+        or ``None`` when verification didn't run (extractive answer, verifier
+        disabled, or model unavailable). Never raises past :meth:`generate`.
+        """
+        answer, used_llm, llm_failed = self.generate(
+            question,
+            evidence,
+            confidence,
+            answer_threshold,
+            intent=intent,
+            comparison_terms=comparison_terms,
+        )
+        # Verify only genuine LLM drafts: extractive output is deterministic
+        # and already evidence-bound, so a reasoning pass adds latency for no
+        # grounding benefit.
+        if not used_llm or not self._verifier_enabled():
+            return answer, used_llm, llm_failed, None
+        try:
+            verifier = self._get_verifier()
+            if not verifier.available():
+                return answer, used_llm, llm_failed, None
+            verification = verifier.verify(question, answer, evidence)
+            return verification.final_answer, used_llm, llm_failed, verification
+        except Exception:  # defensive: verification must never break answering
+            return answer, used_llm, llm_failed, None
+
+    def generate_result(
+        self,
+        question: str,
+        evidence: list[dict[str, object]],
+        confidence: float,
+        answer_threshold: float,
+        *,
+        intent: str | None = None,
+        comparison_terms: tuple[str, str] | None = None,
+    ) -> "AnswerResult":
+        """Structured variant of :meth:`generate` returning an AnswerResult.
+
+        Confidence combines the calibrated retrieval confidence with a bonus
+        for how many independent retrieval signals (BM25 / semantic / graph)
+        contributed to the evidence — answers backed by multiple signals are
+        more trustworthy than single-signal hits.
+        """
+        from graphrag_plus.app.models.schemas import AnswerResult
+
+        answer, used_llm, llm_failed, verification = self.generate_verified(
+            question,
+            evidence,
+            confidence,
+            answer_threshold,
+            intent=intent,
+            comparison_terms=comparison_terms,
+        )
+
+        signals: set[str] = set()
+        for item in evidence:
+            if float(item.get("raw_bm25", 0.0) or 0.0) > 0:
+                signals.add("bm25")
+            if float(item.get("raw_cosine", 0.0) or 0.0) > 0:
+                signals.add("semantic")
+            if float(item.get("raw_graph", item.get("graph_score", 0.0)) or 0.0) > 0:
+                signals.add("graph")
+        signal_bonus = 0.05 * max(0, len(signals) - 1)
+        final_confidence = min(1.0, max(0.0, confidence + signal_bonus))
+
+        sources = list(dict.fromkeys(str(item.get("source_id", "")) for item in evidence if item.get("source_id")))
+        reasoning_bits = [
+            f"signals={'+'.join(sorted(signals)) or 'none'}",
+            f"generator={'llm' if used_llm else 'extractive'}",
+        ]
+        if llm_failed:
+            reasoning_bits.append("llm_failed=fallback_to_extractive")
+
+        return AnswerResult(
+            answer=answer,
+            confidence=final_confidence,
+            sources=sources,
+            entities_used=[],
+            reasoning="; ".join(reasoning_bits),
+            verified_by_reasoning=bool(verification and getattr(verification, "verified", False)),
+            reasoning_summary=str(getattr(verification, "reasoning_summary", "") or ""),
+            answer_changed_by_reasoning=bool(verification and getattr(verification, "changed", False)),
+        )
 
 
 # --- module-level helpers ---------------------------------------------------

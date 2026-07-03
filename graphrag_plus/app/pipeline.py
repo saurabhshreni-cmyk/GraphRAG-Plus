@@ -260,6 +260,16 @@ class GraphRAGPipeline:
         )
         timings["graph_upsert_ms"] = self._ms_since(graph_start)
 
+        # Mirror the extraction into Neo4j (production graph backend). Failures
+        # never block ingestion — retrieval degrades to BM25 + FAISS.
+        neo4j_start = time.perf_counter()
+        self._safe(
+            "graph.neo4j_sync",
+            lambda: self._sync_to_neo4j(bundle.meta.corpus_id, documents, chunks, entities, relations),
+            None,
+        )
+        timings["neo4j_sync_ms"] = self._ms_since(neo4j_start)
+
         version_info = self._safe(
             "graph.versioning.create",
             lambda: self.version_manager.create_version(
@@ -320,6 +330,91 @@ class GraphRAGPipeline:
             corpus_name=bundle.meta.name,
             corpus_domain=bundle.meta.domain,
         )
+
+    def _sync_to_neo4j(
+        self,
+        corpus_id: str,
+        documents: list[Any],
+        chunks: list[Any],
+        entities: list[Any],
+        relations: list[Any],
+    ) -> None:
+        """Push this ingest's extractions into Neo4j, batched, corpus-scoped."""
+        from graphrag_plus.app.graph.neo4j_store import get_neo4j_store
+        from graphrag_plus.app.models.schemas import Entity, EntityType, Relationship
+
+        store = get_neo4j_store()
+        if not store.health_check():
+            self.logger.warning("neo4j.sync_skipped corpus=%s — database unreachable", corpus_id)
+            return
+
+        valid_types = {member.value for member in EntityType}
+        doc_sources = {doc.doc_id: doc.source for doc in documents}
+
+        schema_entities = [
+            Entity(
+                name=entity.text,
+                type=EntityType(entity.entity_type.upper() if entity.entity_type.upper() in valid_types else "OTHER"),
+                confidence=float(entity.confidence),
+            )
+            for entity in entities
+        ]
+        schema_rels = [
+            Relationship(
+                source=rel.subject,
+                target=rel.obj,
+                relation=rel.predicate,
+                confidence=float(rel.confidence),
+            )
+            for rel in relations
+        ]
+        chunk_rows = [
+            {
+                "chunk_id": chunk.chunk_id,
+                "text": chunk.text,
+                "source": doc_sources.get(chunk.doc_id, chunk.doc_id),
+            }
+            for chunk in chunks
+        ]
+        link_rows = [
+            {"entity_name": entity.text, "chunk_id": entity.source_chunk_id} for entity in entities
+        ]
+
+        store.add_chunks_batch(chunk_rows, corpus_id)
+        store.add_entities_batch(schema_entities, corpus_id)
+        store.add_relationships_batch(schema_rels, corpus_id)
+        store.link_entities_batch(link_rows, corpus_id)
+        log_event(
+            self.logger,
+            "neo4j.sync_complete",
+            {
+                "corpus_id": corpus_id,
+                "chunks": len(chunk_rows),
+                "entities": len(schema_entities),
+                "relations": len(schema_rels),
+                "links": len(link_rows),
+            },
+        )
+
+        # Entity resolution: collapse duplicate entities ("Apple" / "Apple
+        # Inc") into canonical nodes so graph traversal doesn't fragment.
+        import os
+
+        if os.environ.get("GRAPHRAG_ENTITY_RESOLUTION", "1").strip().lower() not in {"0", "false", "no"}:
+            from graphrag_plus.app.embeddings.embedder import get_embedder
+            from graphrag_plus.app.graph.entity_resolver import EntityResolver
+
+            resolver = EntityResolver(store, get_embedder())
+            stats = resolver.resolve_corpus(corpus_id)
+            log_event(
+                self.logger,
+                "neo4j.entity_resolution",
+                {
+                    "corpus_id": corpus_id,
+                    "merged_count": stats.get("merged_count", 0),
+                    "time_taken_s": stats.get("time_taken_s", 0.0),
+                },
+            )
 
     def _record_contradictions(self, contradictions: list[ContradictionItem]) -> None:
         """Persist contradictions for query-time consumption + update trust."""
@@ -458,9 +553,9 @@ class GraphRAGPipeline:
             self.generator.llm_enabled = request.llm_enabled
 
         generation_start = time.perf_counter()
-        answer_text, used_llm, llm_failed = self._safe(
+        answer_text, used_llm, llm_failed, verification = self._safe(
             "generation.generate",
-            lambda: self.generator.generate(
+            lambda: self.generator.generate_verified(
                 request.question,
                 [item.model_dump() for item in evidence_items],
                 calibrated_confidence,
@@ -468,7 +563,7 @@ class GraphRAGPipeline:
                 intent=intent.value,
                 comparison_terms=cmp_terms,
             ),
-            ("I cannot answer reliably due to an internal error.", False, True),
+            ("I cannot answer reliably due to an internal error.", False, True, None),
         )
         module_timings["generation_ms"] = self._ms_since(generation_start)
         # Restore the global default so subsequent requests aren't affected.
@@ -576,6 +671,9 @@ class GraphRAGPipeline:
             corpus_id=bundle.meta.corpus_id,
             corpus_name=bundle.meta.name,
             corpus_domain=bundle.meta.domain,
+            verified_by_reasoning=bool(verification and getattr(verification, "verified", False)),
+            reasoning_summary=str(getattr(verification, "reasoning_summary", "") or ""),
+            answer_changed_by_reasoning=bool(verification and getattr(verification, "changed", False)),
         )
 
         output_payload = {
@@ -631,6 +729,10 @@ class GraphRAGPipeline:
 
     @staticmethod
     def _evidence_from(item: dict[str, Any]) -> EvidenceItem:
+        def _opt(key: str) -> float | None:
+            value = item.get(key)
+            return float(value) if isinstance(value, (int | float)) else None
+
         return EvidenceItem(
             id=item["id"],
             source_id=item["source_id"],
@@ -642,6 +744,9 @@ class GraphRAGPipeline:
             trust_score=float(item["trust_score"]),
             uncertainty_penalty=float(item["uncertainty_penalty"]),
             final_score=float(item["final_score"]),
+            raw_bm25=_opt("raw_bm25"),
+            raw_semantic=_opt("raw_cosine"),
+            raw_graph=_opt("raw_graph"),
         )
 
     def _collect_conflicts(
