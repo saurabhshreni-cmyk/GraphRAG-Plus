@@ -780,20 +780,29 @@ class AnswerGenerator:
         return " ".join(top)
 
     # ---------------------------------------------------------------- LLM path
+    # How many evidence chunks feed the LLM prompt. 5 (not 3) because the
+    # answer for aggregate questions ("which companies…") often lives in
+    # rank-4/5 chunks; the client still caps total context characters.
+    _CONTEXT_CHUNKS = 5
+
     @staticmethod
     def _build_context(evidence: list[dict[str, object]]) -> str:
-        """Top-3 strongest chunks, deduped sentence-by-sentence.
+        """Top-N strongest chunks, deduped sentence-by-sentence.
 
         Sorted-by-final-score happens upstream (ScoringModule), so we just
         take the prefix here. We split into sentences so duplicate sentences
         across overlapping chunks (common when ingestion produced
         near-identical paragraphs) don't show up twice in the prompt.
+
+        Uses the chunk's FULL text (the client caps total context length) —
+        the 300-char snippet routinely truncates mid-answer, which made the
+        LLM abstain on questions the evidence could actually answer.
         """
         seen: set[str] = set()
         rendered: list[str] = []
-        for idx, item in enumerate(evidence[:3]):
+        for idx, item in enumerate(evidence[: AnswerGenerator._CONTEXT_CHUNKS]):
             source = str(item.get("source_id", "?"))
-            snippet = str(item.get("snippet", "") or "").strip()
+            snippet = str(item.get("full_text") or item.get("snippet") or "").strip()
             if not snippet:
                 continue
             kept_sentences: list[str] = []
@@ -819,13 +828,16 @@ class AnswerGenerator:
 
     # --------------------------------------------------------- quality filter
     @staticmethod
-    def _llm_answer_passes_quality(question: str, answer: str) -> bool:
-        """Reject LLM output that doesn't share key terms with the question.
+    def _llm_answer_passes_quality(question: str, answer: str, context: str = "") -> bool:
+        """Reject LLM output that is neither question-relevant nor grounded.
 
-        Without this gate a model that drifts off-topic ("Here is a poem
-        about graphs...") would be returned to the user verbatim. We require
-        either at least one shared content token, OR — for very short
-        questions — that the answer be substantive (>= 6 content tokens).
+        Two ways to pass:
+        1. Shares a content token with the question, OR
+        2. Is grounded in the evidence: at least half of the answer's content
+           tokens appear in the context. This admits legitimate entity-list
+           answers ("Google, Microsoft, LinkedIn…") that paraphrase the
+           question entirely, while still rejecting free-associated output
+           whose vocabulary matches neither question nor evidence.
         """
         q_tokens = _tokens(question)
         a_tokens = _tokens(answer)
@@ -833,10 +845,13 @@ class AnswerGenerator:
             return bool(a_tokens)
         if q_tokens & a_tokens:
             return True
-        # If the question has only one content token (e.g. "NetworkX?") and
-        # the answer is substantive, allow it through. The retrieval gate
-        # already enforced that the chunks are on-topic, so the answer is
-        # almost certainly grounded even if it paraphrases the term.
+        if context and a_tokens:
+            c_tokens = _tokens(context)
+            grounded = len(a_tokens & c_tokens)
+            if grounded >= 3 and grounded / len(a_tokens) >= 0.5:
+                return True
+        # Single-content-token questions ("NetworkX?") with a substantive
+        # answer pass — retrieval already enforced topical chunks.
         return len(q_tokens) <= 1 and len(a_tokens) >= 6
 
     # ----------------------------------------------------------------- public
@@ -902,10 +917,9 @@ class AnswerGenerator:
             if abstain.lower().rstrip(".") in lowered_answer:
                 return extractive, False, True
 
-        # Quality filter: reject completions that drifted off-topic. The
-        # retrieval gates already ensure the chunks share query terms with
-        # the question, so the answer should too.
-        if not self._llm_answer_passes_quality(question, llm_answer):
+        # Quality filter: reject completions that are neither on-topic nor
+        # grounded in the retrieved evidence.
+        if not self._llm_answer_passes_quality(question, llm_answer, self._build_context(evidence)):
             return extractive, False, True
 
         return llm_answer, True, False

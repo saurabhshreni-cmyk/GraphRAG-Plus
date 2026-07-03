@@ -50,9 +50,10 @@ ANTHROPIC_VERSION = "2023-06-01"
 OLLAMA_BASE_URL_DEFAULT = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_URL_DEFAULT = f"{OLLAMA_BASE_URL_DEFAULT}/api/generate"
 OLLAMA_MODEL_DEFAULT = "qwen3.5:4b"
-# Spec: LLM answers must return within 30 seconds or we fall back to
-# extractive generation.
-OLLAMA_TIMEOUT_S_DEFAULT = 30.0
+# Default 30s; env-tunable because on RAM-constrained hosts the answer
+# model gets evicted whenever the reasoning verifier runs, and the reload
+# alone can eat the whole budget. On timeout we fall back to extractive.
+OLLAMA_TIMEOUT_S_DEFAULT = float(os.environ.get("OLLAMA_TIMEOUT_S", "30"))
 
 _SYSTEM_PROMPT = (
     "You are GraphRAG++'s answer composer. Answer the user's question using "

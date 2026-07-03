@@ -52,6 +52,16 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 _MIN_BLEND = 0.20
 _MIN_COSINE = 0.20
 _STRONG_COSINE = 0.30
+# BGE-family cosine baselines run much higher than TF-IDF (unrelated text
+# still scores ~0.2-0.36), so FAISS mode needs its own floors. Measured on
+# bge-large-en-v1.5: on-topic 0.68-0.85, off-topic 0.21-0.36.
+_MIN_COSINE_FAISS = 0.45
+_STRONG_COSINE_FAISS = 0.55
+# Loose fallback relaxes floors less aggressively in FAISS mode — halving
+# them (as TF-IDF mode does) would drop below the off-topic baseline and
+# leak irrelevant chunks into NO_EVIDENCE queries.
+_LOOSE_FACTOR_TFIDF = 0.5
+_LOOSE_FACTOR_FAISS = 0.85
 
 # Hybrid blend weights (FAISS semantic available).
 _W_BM25_HYBRID = 0.35
@@ -334,9 +344,12 @@ class RetrievalService:
                 comparison_terms[1].lower().strip(),
             )
 
-        # Loose-mode floors for the fallback pass.
-        min_blend = _MIN_BLEND * (0.5 if loose else 1.0)
-        min_cosine = _MIN_COSINE * (0.5 if loose else 1.0)
+        # Backend-specific floors; loose mode relaxes them (see constants).
+        base_min_cosine = _MIN_COSINE_FAISS if semantic_is_faiss else _MIN_COSINE
+        strong_cosine = _STRONG_COSINE_FAISS if semantic_is_faiss else _STRONG_COSINE
+        loose_factor = _LOOSE_FACTOR_FAISS if semantic_is_faiss else _LOOSE_FACTOR_TFIDF
+        min_blend = _MIN_BLEND * (loose_factor if loose else 1.0)
+        min_cosine = base_min_cosine * (loose_factor if loose else 1.0)
 
         rows: list[dict[str, float]] = []
         rejected: list[dict[str, object]] = []
@@ -377,11 +390,11 @@ class RetrievalService:
                 has_a = cmp_a in chunk_text_lower
                 has_b = cmp_b in chunk_text_lower
                 # Pass if BOTH terms present, OR semantic strong enough.
-                comparison_pass = (has_a and has_b) or semantic >= _STRONG_COSINE
+                comparison_pass = (has_a and has_b) or semantic >= strong_cosine
 
             chunk_tokens = self._tokenized[idx] if idx < len(self._tokenized) else _tokenize(chunk.text)
             shares_term = bool(question_token_set.intersection(chunk_tokens))
-            semantic_strong = semantic >= _STRONG_COSINE
+            semantic_strong = semantic >= strong_cosine
 
             blend_strong = blended >= min_blend
             cos_above_floor = semantic >= min_cosine

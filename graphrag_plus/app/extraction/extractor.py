@@ -243,6 +243,11 @@ def _coerce_payload(payload: dict[str, Any], chunk_id: str) -> ExtractionResult:
         relation = re.sub(r"\s+", "_", str(row.get("relation", "related_to")).strip().lower())
         if not source or not target or source.lower() == target.lower():
             continue
+        # Endpoints become graph nodes (backfilled below), so the same
+        # temporal-noise gate that guards entities must guard them too —
+        # otherwise bare "2024" / "January" nodes leak in via relationships.
+        if _is_temporal_noise(source) or _is_temporal_noise(target):
+            continue
         try:
             confidence = float(row.get("confidence", 0.8))
         except (TypeError, ValueError):
