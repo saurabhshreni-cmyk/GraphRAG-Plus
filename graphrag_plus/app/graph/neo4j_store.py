@@ -464,6 +464,16 @@ class Neo4jStore:
             rows = self._run("MATCH (n) RETURN count(n) AS c")
         return int(rows[0]["c"]) if rows else 0
 
+    def available(self) -> bool:
+        """True iff a live driver is connected.
+
+        Cheap: after the first failed connect attempt ``_connect_failed`` is
+        set, so this returns immediately without paying the connection timeout
+        again. Used by the API to decide whether to serve graph endpoints from
+        Neo4j or fall back to the local NetworkX store.
+        """
+        return self._get_driver() is not None
+
     def health_check(self) -> bool:
         """True iff the database answers a trivial query."""
         rows = self._run("RETURN 1 AS ok")
