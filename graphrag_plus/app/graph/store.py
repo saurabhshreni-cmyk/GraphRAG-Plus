@@ -97,8 +97,15 @@ class GraphStore:
         for relation in relations:
             subj_id = f"ent::{relation.subject.lower()}"
             obj_id = f"ent::{relation.obj.lower()}"
-            self.graph.add_node(subj_id, node_type="Entity", label=relation.subject)
-            self.graph.add_node(obj_id, node_type="Entity", label=relation.obj)
+            # Don't clobber a specific type (Org/Person/...) already assigned by
+            # the entity-mention pass above with the generic "Entity"; only set
+            # the generic type when the node is new or still generic. This keeps
+            # the graph visualization correctly colour-typed.
+            for node_id, label in ((subj_id, relation.subject), (obj_id, relation.obj)):
+                existing = self.graph.nodes.get(node_id, {}).get("node_type")
+                self.graph.add_node(
+                    node_id, node_type=existing or "Entity", label=label
+                )
             edge_type = (
                 relation.stance if relation.stance in {"supports", "contradicts"} else relation.predicate
             )

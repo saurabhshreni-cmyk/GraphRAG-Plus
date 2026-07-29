@@ -42,7 +42,7 @@
                                    └──────────────────────────────┘
 ```
 
-Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → BM25+FAISS; no embedding model → TF-IDF; verification timeout → unverified draft.
+Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → BM25+FAISS for retrieval **and the graph-exploration endpoints (`/graph/{cid}/full`, `/query-path`, `/entity`, `/stats`) fall back to the per-corpus NetworkX store persisted on every ingest**, so the knowledge-graph visualization works fully offline; no embedding model → TF-IDF; verification timeout → unverified draft. **Neo4j is therefore optional** — the system is fully functional (graph included) with only Ollama + a HuggingFace embedding model, both local.
 
 ## 2. Models Used and Why
 
@@ -55,7 +55,7 @@ Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → 
 
 ## 3. How to Run Locally (from scratch)
 
-Prerequisites: **Python 3.12**, **Node 18+**, **Ollama** (`ollama pull qwen3.5:4b && ollama pull deepseek-r1:8b`), a **Neo4j AuraDB** instance (free tier works).
+Prerequisites: **Python 3.12/3.13**, **Node 18+**, **Ollama** (`ollama pull qwen3.5:4b && ollama pull deepseek-r1:8b`). **Neo4j AuraDB is optional** — if `NEO4J_*` is unset or unreachable, the graph endpoints serve from the local per-corpus NetworkX store instead (data is identical; it's written on every ingest). Set the `NEO4J_*` vars only if you want the graph mirrored into a real Neo4j instance.
 
 ```powershell
 git clone https://github.com/saurabhshreni-cmyk/GraphRAG-Plus.git
@@ -128,6 +128,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173
 - **LLM extraction is budgeted** (8 chunks/ingest by default) — relations are sparse on long documents; raise `GRAPHRAG_LLM_EXTRACTION_MAX_CHUNKS` at ~60-90 s/chunk.
 - **Entity resolution canonical-name choice** is "longest wins", which occasionally picks awkward canonicals ("Microsoft Research's" over "Microsoft").
 - Verification runs only on LLM drafts, not extractive answers (by design — extractive output is already evidence-bound).
+- **Neo4j-optional mode**: when Neo4j is unavailable the graph endpoints serve from the local NetworkX store, which does not run the in-database EntityResolver dedup pass — duplicate surface forms (e.g. "Apple"/"Apple Inc") may appear as separate nodes until a Neo4j instance is attached. Retrieval, PPR graph signal, answers, and the visualization are otherwise unaffected.
 - PPR loads the corpus entity graph into Python per query; fine to ~10k entities, needs Neo4j GDS beyond that.
 - Wikipedia loader extracts the article's lead sections (~8 k chars), not the full page.
 

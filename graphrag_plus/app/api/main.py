@@ -16,6 +16,7 @@ from graphrag_plus.app.config.settings import get_settings
 from graphrag_plus.app.corpus.blob_store import make_blob_store
 from graphrag_plus.app.corpus.seed import seed_demo_corpus
 from graphrag_plus.app.evaluation.runner import evaluate_stub
+from graphrag_plus.app.graph import local_graph
 from graphrag_plus.app.pipeline import GraphRAGPipeline
 from graphrag_plus.app.schemas.models import (
     CorpusInfo,
@@ -44,8 +45,13 @@ app = FastAPI(title="GraphRAG++")
 _LOW_VALUE_EDGES: set[str] = set()
 _MIN_EDGE_CONFIDENCE = 0.6
 
-# CORS — origins controlled by env (comma-separated). Defaults are local Vite dev servers.
-_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+# CORS — origins controlled by env (comma-separated). Defaults cover the local
+# Vite dev server (5173) and the production-preview server (4173) on both
+# localhost and 127.0.0.1, so the UI works out of the box either way.
+_default_origins = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:4173,http://127.0.0.1:4173"
+)
 _origins = [
     origin.strip()
     for origin in os.environ.get("GRAPHRAG_CORS_ORIGINS", _default_origins).split(",")
@@ -286,6 +292,29 @@ def _neo4j():
     return get_neo4j_store()
 
 
+def _local_graph_store(corpus_id: str):
+    """Per-corpus NetworkX GraphStore + chunk dicts for the Neo4j fallback.
+
+    Returns ``(None, [])`` when the corpus does not exist. The graph data is
+    persisted to ``graph.json`` on every ingest, so this always reflects the
+    same entities/relations that were pushed to Neo4j — it just works offline.
+    """
+    try:
+        bundle = pipeline.corpus_manager.get(corpus_id)
+    except KeyError:
+        return None, []
+    chunks = [
+        {
+            "chunk_id": c.chunk_id,
+            "text": c.text,
+            "doc_id": c.doc_id,
+            "source": getattr(c, "source", "") or c.doc_id,
+        }
+        for c in bundle.retrieval.chunks
+    ]
+    return bundle.graph_store, chunks
+
+
 @app.get("/graph/{corpus_id}/full")
 def graph_full(corpus_id: str, max_nodes: int = 500) -> dict[str, Any]:
     """Full Neo4j graph for a corpus: Entity + Chunk nodes, all edges.
@@ -294,21 +323,31 @@ def graph_full(corpus_id: str, max_nodes: int = 500) -> dict[str, Any]:
     nodes are included only when they fit inside the remaining budget.
     """
     store = _neo4j()
-    entity_rows = store._run(
-        """
-        MATCH (e:Entity {corpus_id: $cid})
-        OPTIONAL MATCH (e)-[r]-()
-        WITH e, count(r) AS degree
-        RETURN e.name AS id, e.name AS label, coalesce(e.type, 'OTHER') AS type,
-               coalesce(e.description, '') AS description, degree AS connection_count
-        ORDER BY degree DESC
-        LIMIT $max_nodes
-        """,
-        cid=corpus_id,
-        max_nodes=max(1, min(max_nodes, 500)),
+    entity_rows = (
+        store._run(
+            """
+            MATCH (e:Entity {corpus_id: $cid})
+            OPTIONAL MATCH (e)-[r]-()
+            WITH e, count(r) AS degree
+            RETURN e.name AS id, e.name AS label, coalesce(e.type, 'OTHER') AS type,
+                   coalesce(e.description, '') AS description, degree AS connection_count
+            ORDER BY degree DESC
+            LIMIT $max_nodes
+            """,
+            cid=corpus_id,
+            max_nodes=max(1, min(max_nodes, 500)),
+        )
+        if store.available()
+        else []
     )
     if not entity_rows:
-        raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
+        # Neo4j is down or empty — serve the identical shape from the local
+        # NetworkX graph (populated on every ingest).
+        gs, _ = _local_graph_store(corpus_id)
+        result = local_graph.graph_full(gs, max_nodes) if gs is not None else None
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
+        return result
     keep = {row["id"] for row in entity_rows}
 
     edge_rows = store._run(
@@ -360,6 +399,11 @@ def graph_query_path(corpus_id: str, q: str) -> dict[str, Any]:
         seed_names = [t for t in _re.findall(r"[A-Za-z0-9]{3,}", q)][:5]
 
     store = _neo4j()
+    if not store.available():
+        gs, _ = _local_graph_store(corpus_id)
+        if gs is None:
+            raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
+        return local_graph.graph_query_path(gs, seed_names, q)
     matched = store._run(
         """
         UNWIND $names AS name
@@ -400,6 +444,14 @@ def graph_query_path(corpus_id: str, q: str) -> dict[str, Any]:
 def graph_entity(corpus_id: str, entity_name: str) -> dict[str, Any]:
     """One entity's metadata, neighbours (with relation types), and chunks."""
     store = _neo4j()
+    if not store.available():
+        gs, chunks = _local_graph_store(corpus_id)
+        result = local_graph.graph_entity(gs, entity_name, chunks) if gs is not None else None
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail=f"Entity '{entity_name}' not found in corpus"
+            )
+        return result
     meta = store._run(
         """
         MATCH (e:Entity {corpus_id: $cid})
@@ -442,6 +494,12 @@ def graph_entity(corpus_id: str, entity_name: str) -> dict[str, Any]:
 def graph_stats(corpus_id: str) -> dict[str, Any]:
     """Corpus graph statistics: type histograms + most connected entities."""
     store = _neo4j()
+    if not store.available():
+        gs, _ = _local_graph_store(corpus_id)
+        result = local_graph.graph_stats(gs) if gs is not None else None
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
+        return result
     nodes_by_type = store._run(
         """
         MATCH (e:Entity {corpus_id: $cid})
