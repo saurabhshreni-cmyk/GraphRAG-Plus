@@ -933,9 +933,11 @@ class AnswerGenerator:
     @classmethod
     def _get_verifier(cls):
         if cls._verifier is None:
-            from graphrag_plus.app.generation.reasoning_verifier import ReasoningVerifier
+            from graphrag_plus.app.generation.reasoning_verifier import build_reasoning_verifier
 
-            cls._verifier = ReasoningVerifier()
+            # Local Ollama when present, else Groq, else an unavailable
+            # verifier that makes generate_verified skip the pass.
+            cls._verifier = build_reasoning_verifier()
         return cls._verifier
 
     @staticmethod
@@ -958,7 +960,7 @@ class AnswerGenerator:
         intent: str | None = None,
         comparison_terms: tuple[str, str] | None = None,
     ) -> tuple[str, bool, bool, object | None]:
-        """:meth:`generate` plus a DeepSeek R1 verification pass on LLM drafts.
+        """:meth:`generate` plus a reasoning-model verification pass on LLM drafts.
 
         Returns ``(answer, used_llm, llm_failed, verification)`` where
         ``verification`` is a

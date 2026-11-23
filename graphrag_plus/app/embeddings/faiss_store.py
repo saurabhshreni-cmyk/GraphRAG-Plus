@@ -36,8 +36,13 @@ def _normalize(matrix: np.ndarray) -> np.ndarray:
 class FAISSStore:
     """Exact cosine-similarity index over chunk embeddings."""
 
-    def __init__(self, dimension: int = 384):
+    def __init__(self, dimension: int = 384, model_name: str = ""):
         self.dimension = dimension
+        # Identity of the backend that produced these vectors. Dimension alone
+        # does not identify a vector space: Gemini and Jina embeddings are both
+        # 1024-dim and mutually meaningless, so an index must only be reused
+        # when the SAME backend is asking for it.
+        self.model_name = model_name
         self._lock = threading.Lock()
         self._index = None  # lazy: faiss import deferred until first use
         self.chunk_ids: list[str] = []
@@ -112,7 +117,11 @@ class FAISSStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             faiss.write_index(self._get_index(), str(target))
-            meta = {"dimension": self.dimension, "chunk_ids": self.chunk_ids}
+            meta = {
+                "dimension": self.dimension,
+                "model": self.model_name,
+                "chunk_ids": self.chunk_ids,
+            }
             target.with_suffix(target.suffix + ".meta.json").write_text(json.dumps(meta), encoding="utf-8")
         logger.info("faiss.saved path=%s vectors=%d", path, len(self.chunk_ids))
 
@@ -138,6 +147,10 @@ class FAISSStore:
             with self._lock:
                 self._index = index
                 self.dimension = index.d
+                # Absent in indexes written before this field existed; an empty
+                # string makes the caller's identity check fail closed and the
+                # index rebuild, which is the safe direction.
+                self.model_name = str(meta.get("model", ""))
                 self.chunk_ids = chunk_ids
                 self._latest_row = {cid: row for row, cid in enumerate(chunk_ids)}
             logger.info("faiss.loaded path=%s vectors=%d", path, len(chunk_ids))

@@ -35,6 +35,23 @@ pypdf>=4.2.0
 python-docx>=1.1.0
 beautifulsoup4>=4.12.3
 
+# --- semantic retrieval ---
+# FAISS stays in the deployed bundle (~15 MB): the vectors now come from a
+# hosted embedding API instead of a local model, but the index itself is still
+# built and searched in-process, so "1024-dim FAISS index" remains literally
+# true of the deployed system.
+faiss-cpu>=1.8.0
+
+# --- stage-1 NER ---
+# spaCy and en_core_web_sm are ~150 MB together, which the 500 MB Python
+# bundle absorbs comfortably. Keeping them preserves the two-stage extraction
+# design: millisecond statistical NER on every chunk and every query, with the
+# LLM called only for typed relation extraction.
+# The model is not on PyPI, so it is pinned to its release wheel. Keep its
+# minor version aligned with spacy's (3.8.x <-> en_core_web_sm-3.8.x).
+spacy>=3.7.5,<3.9
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
 # --- durable corpus storage (Neon/Supabase Postgres) ---
 # Optional at runtime: the app falls back to file storage under /tmp when
 # GRAPHRAG_DATABASE_URL is unset.

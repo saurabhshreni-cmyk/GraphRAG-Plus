@@ -49,7 +49,12 @@ ANTHROPIC_VERSION = "2023-06-01"
 # ``GROQ_API_KEY`` is set. This is the recommended cloud LLM for deployments
 # where a local Ollama isn't available (e.g. Hugging Face Spaces / any PaaS).
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# ``openai/gpt-oss-20b``, not ``llama-3.3-70b-versatile``. Groq's models page
+# still lists the Llama models under Production, but priced "ContactSales"
+# (Enterprise): their deprecation notice shut them down for free and
+# developer-tier keys on 2026-08-16. The GPT-OSS pair is what a free key can
+# actually call. Override with GROQ_MODEL if your account differs.
+GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 # Base URL comes from OLLAMA_BASE_URL (.env); OLLAMA_URL may override the
 # full generate endpoint directly.
@@ -217,7 +222,7 @@ class GroqClient:
 
     Uses ``urllib`` (no SDK dependency). Reads the key from the constructor or
     the ``GROQ_API_KEY`` env var, and the model from ``GROQ_MODEL`` (default
-    ``llama-3.3-70b-versatile``). ``timeout_s`` caps the request so a slow API
+    ``openai/gpt-oss-20b``). ``timeout_s`` caps the request so a slow API
     never blocks the event loop. On any HTTP/timeout/decode error it raises so
     the caller falls back to extractive output — identical policy to the other
     real clients.

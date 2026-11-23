@@ -187,17 +187,22 @@ class RetrievalService:
                 return
             chunk_ids = [chunk.chunk_id for chunk in chunks]
             if not persist and self.faiss_path is not None:
-                candidate = FAISSStore(dimension=embedder.dimension)
+                candidate = FAISSStore(dimension=embedder.dimension, model_name=embedder.model_name)
                 if (
                     candidate.load(str(self.faiss_path))
                     and candidate.dimension == embedder.dimension
+                    and candidate.model_name == embedder.model_name
                     and sorted(candidate.chunk_ids) == sorted(chunk_ids)
                 ):
                     self.faiss_store = candidate
                     return
-                # Saved index is stale (different chunks or a different
-                # embedding model's dimension) — fall through and rebuild.
-            store = FAISSStore(dimension=embedder.dimension)
+                # Saved index is stale — different chunks, a different
+                # dimension, or vectors from a different embedding backend.
+                # The backend check matters because two providers can share a
+                # dimension while producing incomparable vector spaces: reusing
+                # one provider's index against another's query vectors yields
+                # silently meaningless similarities. Fall through and rebuild.
+            store = FAISSStore(dimension=embedder.dimension, model_name=embedder.model_name)
             embeddings = embedder.embed_batch([chunk.text for chunk in chunks])
             if len(embeddings) != len(chunks):
                 logger.warning(
