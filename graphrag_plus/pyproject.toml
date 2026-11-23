@@ -28,7 +28,11 @@ dependencies = [
   "pydantic-settings>=2.2.1",
   "networkx>=3.2.1",
   "numpy>=1.26.4",
-  "scikit-learn>=1.4.2",
+  # NOTE: scikit-learn is deliberately NOT a runtime dependency. It was used
+  # for one TF-IDF fallback signal and dragged in SciPy, ~160 MB between them,
+  # which is more than half the serverless bundle budget. That signal now lives
+  # in app/retrieval/tfidf.py on NumPy alone. sklearn stays in [dev] purely so
+  # test_tfidf.py can assert the two produce identical scores.
   "rank-bm25>=0.2.2",
   "python-dateutil>=2.9.0.post0",
   "pypdf>=4.2.0",
@@ -64,6 +68,9 @@ extras = [
 dev = [
   "pytest>=8.2.0",
   "pytest-cov>=5.0.0",
+  # Reference implementation for the TF-IDF equivalence test only. Never a
+  # runtime dependency — see the note in [project].dependencies.
+  "scikit-learn>=1.4.2",
   # Pin the lint/format/type tools EXACTLY. These gate CI, and their default
   # rule sets / formatting change between releases — an unpinned `>=` silently
   # turned CI red when a new ruff release enabled PLC0415/PLW0603. Bump these
@@ -166,7 +173,6 @@ exclude = ["graphrag_plus/app/tests", ".tmp", ".cache"]
 module = [
   "networkx.*",
   "rank_bm25.*",
-  "sklearn.*",
   "torch.*",
 ]
 ignore_missing_imports = true

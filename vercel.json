@@ -1,4 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/.pytest_cache/**,**/.mypy_cache/**,**/.ruff_cache/**,graphrag_plus/app/tests/**,graphrag_plus/scripts/**,graphrag_plus/examples/**,graphrag_plus/data/outputs/**,graphrag_plus/data/reports/**,graphrag_plus/data/graph_versions/**,frontend/**,venv/**,_demo/**,graphify-out/**,deploy/**}"
+    }
+  }
 }

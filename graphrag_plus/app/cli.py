@@ -110,7 +110,7 @@ def _health_check() -> dict:
 
     # Vector index readiness (degraded if no ingest yet)
     try:
-        if pipeline.retrieval.chunk_matrix is None:
+        if pipeline.retrieval.tfidf.is_empty:
             issues.append("vector_index_not_built: run ingest first")
     except Exception as exc:
         issues.append(f"vector_index_error: {exc}")

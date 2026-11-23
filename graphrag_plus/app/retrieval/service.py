@@ -23,24 +23,27 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from rank_bm25 import BM25Okapi
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 
 from graphrag_plus.app.embeddings.embedder import get_embedder
 from graphrag_plus.app.embeddings.faiss_store import FAISSStore
 from graphrag_plus.app.graph.store import GraphStore
 from graphrag_plus.app.ingestion.models import Chunk
+from graphrag_plus.app.retrieval.tfidf import TfidfIndex
+from graphrag_plus.app.retrieval.tfidf import tokenize as _tokenize
 from graphrag_plus.app.utils.io_utils import dump_json, load_json
 from graphrag_plus.app.utils.logging_utils import get_logger, log_event
 from graphrag_plus.app.utils.math_utils import safe_entropy
 
-# Use sklearn's built-in English stopword list so BM25 + tokenizer agree with
-# the TF-IDF vocabulary and we don't accidentally let "about", "me", "tell"
-# etc. drive matches for off-topic queries.
-_STOPWORDS = frozenset(ENGLISH_STOP_WORDS)
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+# Tokenization and the English stopword list both live in
+# ``graphrag_plus.app.retrieval.tfidf`` (``_tokenize`` is imported above), so
+# BM25 and TF-IDF share one vocabulary and filler words like "about", "me" or
+# "tell" can't drive matches for off-topic queries. That module vendors
+# sklearn's exact stopword list, which is what the floors below were measured
+# against.
 
 # --- relevance gates --------------------------------------------------------
 # Either signal alone is enough to keep a candidate:
@@ -73,16 +76,6 @@ _W_COSINE = 0.7
 _W_BM25 = 0.3
 
 logger = get_logger(__name__)
-
-
-def _tokenize(text: str) -> list[str]:
-    """Lowercase, strip punctuation, drop stopwords, drop ultra-short tokens.
-
-    The same tokenizer is used at index time and query time so BM25 sees a
-    consistent vocabulary.
-    """
-    tokens = [tok.lower() for tok in _TOKEN_RE.findall(text or "")]
-    return [tok for tok in tokens if tok not in _STOPWORDS and len(tok) > 1]
 
 
 # Patterns that suggest a chunk contains an enumeration. Used for LIST-intent
@@ -131,12 +124,7 @@ class RetrievalService:
         self.corpus_id = chunks_path.parent.name if chunks_path is not None else "default"
         self.faiss_path = chunks_path.parent / "faiss.index" if chunks_path is not None else None
         self.chunks: list[Chunk] = []
-        self.vectorizer = TfidfVectorizer(
-            lowercase=True,
-            stop_words=list(_STOPWORDS),
-            token_pattern=r"(?u)\b[A-Za-z0-9_]{2,}\b",
-        )
-        self.chunk_matrix = None
+        self.tfidf = TfidfIndex()
         self.bm25: BM25Okapi | None = None
         self._tokenized: list[list[str]] = []
         self.faiss_store: FAISSStore | None = None
@@ -163,13 +151,13 @@ class RetrievalService:
         self.chunks = chunks
         texts = [chunk.text for chunk in chunks]
         if not texts:
-            self.chunk_matrix = None
+            self.tfidf = TfidfIndex()
             self.bm25 = None
             self._tokenized = []
             self.faiss_store = None
             return
         # TF-IDF with shared tokenization rules.
-        self.chunk_matrix = self.vectorizer.fit_transform(texts)
+        self.tfidf.fit(texts)
         self._tokenized = [_tokenize(text) for text in texts]
         # rank-bm25 chokes on empty token lists; backfill so every chunk has at
         # least its own id as a token.
@@ -311,7 +299,7 @@ class RetrievalService:
         term-overlap gate — used as a last-resort fallback retrieval pass
         from the pipeline when strict mode returned nothing.
         """
-        if not self.chunks or self.chunk_matrix is None or self.bm25 is None:
+        if not self.chunks or self.tfidf.is_empty or self.bm25 is None:
             log_event(
                 logger,
                 "retrieval.empty_index",
@@ -319,8 +307,7 @@ class RetrievalService:
             )
             return []
 
-        question_vec = self.vectorizer.transform([question])
-        tfidf_cosine = (self.chunk_matrix @ question_vec.T).toarray().ravel()
+        tfidf_cosine = self.tfidf.cosine(question)
         question_tokens = _tokenize(question) or [question.lower()]
         question_token_set = set(question_tokens)
         bm25_scores = np.array(self.bm25.get_scores(question_tokens))
@@ -353,8 +340,13 @@ class RetrievalService:
         min_blend = _MIN_BLEND * (loose_factor if loose else 1.0)
         min_cosine = base_min_cosine * (loose_factor if loose else 1.0)
 
-        rows: list[dict[str, float]] = []
-        rejected: list[dict[str, object]] = []
+        # Heterogeneous by design: each row carries float scores alongside the
+        # ``semantic_backend`` label and the rejection ``reason``. These were
+        # previously inferred as ``dict[str, Any]`` only because SciPy's sparse
+        # ``.toarray()`` returned ``Any``; with that gone the annotation has to
+        # say what the rows actually hold.
+        rows: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
         for idx, chunk in enumerate(self.chunks):
             source_id = chunk.doc_id
             keyword = float(bm25_norm[idx])
