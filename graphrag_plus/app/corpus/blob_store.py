@@ -104,14 +104,14 @@ class PostgresBlobStore:
     def __init__(self, dsn: str) -> None:
         # Import lazily so the package works without psycopg installed when
         # no database is configured.
-        import psycopg  # noqa: F401, PLC0415  (import-time availability check)
+        import psycopg  # noqa: F401  (import-time availability check)
 
         self._dsn = dsn
         self._ensure_schema()
 
     # --------------------------------------------------------------- internals
     def _connect(self) -> Any:
-        import psycopg  # noqa: PLC0415
+        import psycopg
 
         return psycopg.connect(self._dsn)
 
@@ -146,7 +146,7 @@ class PostgresBlobStore:
         return CorpusBlobs(meta=row[0], graph=row[1], chunks=row[2])
 
     def save(self, blobs: CorpusBlobs) -> None:
-        from psycopg.types.json import Jsonb  # noqa: PLC0415
+        from psycopg.types.json import Jsonb
 
         corpus_id = str(blobs.meta["corpus_id"])
         with self._connect() as conn, conn.cursor() as cur:

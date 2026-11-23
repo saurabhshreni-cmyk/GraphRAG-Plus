@@ -87,14 +87,19 @@ cd frontend && npm install && npm run dev     # http://localhost:5173
 
 ## 4. How to Deploy
 
-**Frontend → Vercel**: deploy `frontend/`; set `VITE_API_BASE` to the backend URL. (`vercel.json` / `api/index.py` remain the existing lightweight serverless deployment — untouched.)
+**Full free end-to-end deploy → see [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md).** In brief:
 
-**Backend → Render.com** (Python web service):
-- Build: install the dependency list above; Start: `python -m uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`.
-- Set `NEO4J_*` env vars in the Render dashboard (never commit them).
-- **Ollama does not run on Render's free tier** → set `GRAPHRAG_LLM_ENABLED=false` (extractive answers, still evidence-grounded) or point `OLLAMA_BASE_URL` at hosted inference / set `ANTHROPIC_API_KEY` (client built in).
-- bge-large needs ~2 GB RAM — use a paid instance, or set `EMBEDDING_MODEL=all-MiniLM-L6-v2` for small instances (FAISS dimension adapts automatically).
-- Add the Vercel domain to `GRAPHRAG_CORS_ORIGINS`.
+- **Frontend → Vercel** (static Vite): set `VITE_API_BASE` to the backend URL and redeploy.
+- **Backend → Hugging Face Spaces** (Docker SDK, free CPU · 16 GB RAM): the root `Dockerfile` runs the full ML stack (embeddings + FAISS + spaCy + BM25). Serverless (Vercel) *cannot* host the backend — PyTorch exceeds the ~250 MB function limit — so the backend runs as a container here instead.
+- **LLM → Groq free API**: set `GROQ_API_KEY`. The client auto-selects `Ollama (local) → Groq → Anthropic → extractive`, so no code change is needed to switch providers.
+- **Embeddings**: `EMBEDDING_MODEL=all-MiniLM-L6-v2` (default, fast) or `BAAI/bge-large-en-v1.5` (higher quality; the 16 GB free tier handles it).
+- **Corpora**: optional free Supabase (`GRAPHRAG_DATABASE_URL`) for durability; otherwise `/tmp` + demo re-seed.
+- **Neo4j**: optional — the local NetworkX fallback serves the graph endpoints. Set `NEO4J_*` only to mirror into a real instance.
+- Add the frontend origin to `GRAPHRAG_CORS_ORIGINS`.
+
+> Cloud caveat: DeepSeek-R1 answer verification is Ollama-only (local). Cloud answers are Groq-generated, evidence-grounded drafts; all other behaviour is identical.
+
+The same `Dockerfile` also runs on Render (needs a paid ≥1 GB instance), Fly.io, or Railway.
 
 ## 5. Demo Script (5–7 minutes)
 

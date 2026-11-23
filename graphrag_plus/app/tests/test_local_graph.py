@@ -16,7 +16,14 @@ def _seed_store(tmp_path: Path) -> tuple[GraphStore, list[dict]]:
     store = GraphStore(tmp_path / "graph.json")
     documents = [Document(doc_id="doc1", source="wiki", text="...", metadata={})]
     chunks = [
-        Chunk(chunk_id="doc1_ch0", doc_id="doc1", text="Google and Bing are search engines.", start=0, end=35, timestamp=None)
+        Chunk(
+            chunk_id="doc1_ch0",
+            doc_id="doc1",
+            text="Google and Bing are search engines.",
+            start=0,
+            end=35,
+            timestamp=None,
+        )
     ]
     entities = [
         Entity(text="Google", entity_type="Org", confidence=0.9, method="ner", source_chunk_id="doc1_ch0"),
@@ -34,7 +41,9 @@ def _seed_store(tmp_path: Path) -> tuple[GraphStore, list[dict]]:
         )
     ]
     store.upsert_from_extractions(documents, chunks, entities, relations)
-    chunk_dicts = [{"chunk_id": c.chunk_id, "text": c.text, "doc_id": c.doc_id, "source": "wiki"} for c in chunks]
+    chunk_dicts = [
+        {"chunk_id": c.chunk_id, "text": c.text, "doc_id": c.doc_id, "source": "wiki"} for c in chunks
+    ]
     return store, chunk_dicts
 
 

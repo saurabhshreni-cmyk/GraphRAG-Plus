@@ -107,10 +107,7 @@ def graph_full(graph_store: GraphStore, max_nodes: int = 500) -> dict[str, Any] 
         key = (s, t, rel)
         if weight > edge_map.get(key, -1.0):
             edge_map[key] = weight
-    edges = [
-        {"source": s, "target": t, "relation": rel, "weight": w}
-        for (s, t, rel), w in edge_map.items()
-    ]
+    edges = [{"source": s, "target": t, "relation": rel, "weight": w} for (s, t, rel), w in edge_map.items()]
 
     type_counts: dict[str, int] = {}
     for nid in kept_ids:
@@ -146,9 +143,7 @@ def graph_stats(graph_store: GraphStore) -> dict[str, Any] | None:
     for _s, _t, attrs in _entity_edges(graph):
         rel = _relation_name(attrs)
         rels_by_type[rel] = rels_by_type.get(rel, 0) + 1
-    rels_by_type = dict(
-        sorted(rels_by_type.items(), key=lambda kv: kv[1], reverse=True)[:25]
-    )
+    rels_by_type = dict(sorted(rels_by_type.items(), key=lambda kv: kv[1], reverse=True)[:25])
 
     top_entities = sorted(entity_ids, key=graph.degree, reverse=True)[:10]
     top_connected = [
@@ -253,9 +248,7 @@ def graph_entity(
     }
 
 
-def graph_query_path(
-    graph_store: GraphStore, seed_names: list[str], query: str
-) -> dict[str, Any]:
+def graph_query_path(graph_store: GraphStore, seed_names: list[str], query: str) -> dict[str, Any]:
     """Local equivalent of ``GET /graph/{cid}/query-path``.
 
     ``seed_names`` are the query's candidate entity strings (spaCy entities or
@@ -290,9 +283,7 @@ def graph_query_path(
             break
     edges = [{"source": s, "target": t, "relation": rel} for (s, t, rel) in edge_map]
 
-    neighbour_ids = sorted(
-        ({e["target"] for e in edges} | {e["source"] for e in edges}) - set(seed_ids)
-    )
+    neighbour_ids = sorted(({e["target"] for e in edges} | {e["source"] for e in edges}) - set(seed_ids))
     return {
         "query": query,
         "extracted_entities": seed_names,

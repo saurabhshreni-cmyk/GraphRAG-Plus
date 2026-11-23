@@ -107,9 +107,11 @@ class ReasoningVerifier:
             return self._available
         try:
             listed = self._get_client().list()
-            names = {m.get("model", "") for m in listed.get("models", [])} if isinstance(listed, dict) else {
-                getattr(m, "model", "") for m in getattr(listed, "models", [])
-            }
+            names = (
+                {m.get("model", "") for m in listed.get("models", [])}
+                if isinstance(listed, dict)
+                else {getattr(m, "model", "") for m in getattr(listed, "models", [])}
+            )
             self._available = any(name.startswith(self.model) for name in names)
         except Exception as exc:
             logger.warning("verifier.availability_check_failed error=%s", str(exc)[:150])
@@ -119,9 +121,7 @@ class ReasoningVerifier:
         return self._available
 
     # ------------------------------------------------------------------- verify
-    def verify(
-        self, question: str, draft_answer: str, evidence_chunks: list[dict]
-    ) -> VerificationResult:
+    def verify(self, question: str, draft_answer: str, evidence_chunks: list[dict]) -> VerificationResult:
         """Check ``draft_answer`` against evidence; never raises.
 
         Returns the draft unchanged (``verified=False``) on any failure,
@@ -181,9 +181,7 @@ class ReasoningVerifier:
 
         changed = _normalize_for_compare(final_answer) != _normalize_for_compare(draft_answer)
         elapsed = round(time.perf_counter() - start, 2)
-        logger.info(
-            "verifier.done model=%s changed=%s elapsed=%.1fs", self.model, changed, elapsed
-        )
+        logger.info("verifier.done model=%s changed=%s elapsed=%.1fs", self.model, changed, elapsed)
         return VerificationResult(
             final_answer=final_answer,
             verified=True,
@@ -206,11 +204,8 @@ class ReasoningVerifier:
         reasoning = visible[:marker_at].strip()
         # Compact multi-line reasoning into a short summary (first + last point).
         lines = [ln.strip() for ln in reasoning.splitlines() if ln.strip()]
-        if len(lines) > 4:
-            summary = " ".join(lines[:2]) + " … " + lines[-1]
-        else:
-            summary = " ".join(lines)
+        summary = " ".join(lines[:2]) + " … " + lines[-1] if len(lines) > 4 else " ".join(lines)
         return final, summary[:600]
 
 
-__all__ = ["ReasoningVerifier", "VerificationResult", "_ABSTAIN_TEXT"]
+__all__ = ["_ABSTAIN_TEXT", "ReasoningVerifier", "VerificationResult"]

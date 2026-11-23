@@ -131,9 +131,7 @@ class EntityResolver:
         return result
 
     # ------------------------------------------------------------- strategies
-    def _string_pass(
-        self, entities: list[dict[str, str]], uf: _UnionFind
-    ) -> list[tuple[str, str, float]]:
+    def _string_pass(self, entities: list[dict[str, str]], uf: _UnionFind) -> list[tuple[str, str, float]]:
         """SequenceMatcher over same-type pairs. Returns (dup, canon, sim)."""
         merges: list[tuple[str, str, float]] = []
         by_type: dict[str, list[str]] = {}

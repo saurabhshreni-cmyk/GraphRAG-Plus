@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    from graphrag_plus.app.models.schemas import AnswerResult
 
 # Sentinel strings the LLM is instructed to emit when evidence doesn't cover
 # the question. Detecting them lets us fall back to extractive output instead
@@ -855,7 +858,7 @@ class AnswerGenerator:
         return len(q_tokens) <= 1 and len(a_tokens) >= 6
 
     # ----------------------------------------------------------------- public
-    def generate(  # noqa: PLR0911 -- early returns mirror the documented gate flow
+    def generate(
         self,
         question: str,
         evidence: list[dict[str, object]],
@@ -994,7 +997,7 @@ class AnswerGenerator:
         *,
         intent: str | None = None,
         comparison_terms: tuple[str, str] | None = None,
-    ) -> "AnswerResult":
+    ) -> AnswerResult:
         """Structured variant of :meth:`generate` returning an AnswerResult.
 
         Confidence combines the calibrated retrieval confidence with a bonus
@@ -1015,16 +1018,18 @@ class AnswerGenerator:
 
         signals: set[str] = set()
         for item in evidence:
-            if float(item.get("raw_bm25", 0.0) or 0.0) > 0:
+            if float(cast(float, item.get("raw_bm25", 0.0) or 0.0)) > 0:
                 signals.add("bm25")
-            if float(item.get("raw_cosine", 0.0) or 0.0) > 0:
+            if float(cast(float, item.get("raw_cosine", 0.0) or 0.0)) > 0:
                 signals.add("semantic")
-            if float(item.get("raw_graph", item.get("graph_score", 0.0)) or 0.0) > 0:
+            if float(cast(float, item.get("raw_graph", item.get("graph_score", 0.0)) or 0.0)) > 0:
                 signals.add("graph")
         signal_bonus = 0.05 * max(0, len(signals) - 1)
         final_confidence = min(1.0, max(0.0, confidence + signal_bonus))
 
-        sources = list(dict.fromkeys(str(item.get("source_id", "")) for item in evidence if item.get("source_id")))
+        sources = list(
+            dict.fromkeys(str(item.get("source_id", "")) for item in evidence if item.get("source_id"))
+        )
         reasoning_bits = [
             f"signals={'+'.join(sorted(signals)) or 'none'}",
             f"generator={'llm' if used_llm else 'extractive'}",

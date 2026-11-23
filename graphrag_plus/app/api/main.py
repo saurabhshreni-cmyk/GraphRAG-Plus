@@ -46,11 +46,14 @@ _LOW_VALUE_EDGES: set[str] = set()
 _MIN_EDGE_CONFIDENCE = 0.6
 
 # CORS — origins controlled by env (comma-separated). Defaults cover the local
-# Vite dev server (5173) and the production-preview server (4173) on both
-# localhost and 127.0.0.1, so the UI works out of the box either way.
+# Vite dev server (5173), the production-preview server (4173) on both localhost
+# and 127.0.0.1, and the deployed Vercel dashboard — so the UI works out of the
+# box in dev and in production even if GRAPHRAG_CORS_ORIGINS is left unset.
+# Set GRAPHRAG_CORS_ORIGINS to lock this down to your own origin(s).
 _default_origins = (
     "http://localhost:5173,http://127.0.0.1:5173,"
-    "http://localhost:4173,http://127.0.0.1:4173"
+    "http://localhost:4173,http://127.0.0.1:4173,"
+    "https://graphrag-plus-dashboard.vercel.app"
 )
 _origins = [
     origin.strip()
@@ -363,9 +366,7 @@ def graph_full(corpus_id: str, max_nodes: int = 500) -> dict[str, Any]:
     type_counts: dict[str, int] = {}
     for row in entity_rows:
         type_counts[row["type"]] = type_counts.get(row["type"], 0) + 1
-    total_entities = store._run(
-        "MATCH (e:Entity {corpus_id: $cid}) RETURN count(e) AS c", cid=corpus_id
-    )
+    total_entities = store._run("MATCH (e:Entity {corpus_id: $cid}) RETURN count(e) AS c", cid=corpus_id)
     total_edges = store._run(
         "MATCH (:Entity {corpus_id: $cid})-[r:RELATES_TO]->(:Entity {corpus_id: $cid}) RETURN count(r) AS c",
         cid=corpus_id,
@@ -398,148 +399,147 @@ def graph_query_path(corpus_id: str, q: str) -> dict[str, Any]:
 
         seed_names = [t for t in _re.findall(r"[A-Za-z0-9]{3,}", q)][:5]
 
+    # Neo4j first; fall back to the local graph when it's down OR when this
+    # corpus hasn't been synced into Neo4j yet (live-but-empty).
     store = _neo4j()
-    if not store.available():
-        gs, _ = _local_graph_store(corpus_id)
-        if gs is None:
-            raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
-        return local_graph.graph_query_path(gs, seed_names, q)
-    matched = store._run(
-        """
-        UNWIND $names AS name
-        MATCH (e:Entity {corpus_id: $cid})
-        WHERE toLower(e.name) = toLower(name) OR toLower(e.name) CONTAINS toLower(name)
-        RETURN DISTINCT e.name AS id, coalesce(e.type, 'OTHER') AS type
-        LIMIT 25
-        """,
-        names=seed_names,
-        cid=corpus_id,
-    )
-    seed_ids = [row["id"] for row in matched]
-    edges = (
-        store._run(
+    if store.available():
+        matched = store._run(
             """
             UNWIND $names AS name
-            MATCH (a:Entity {name: name, corpus_id: $cid})-[r:RELATES_TO]-(b:Entity {corpus_id: $cid})
-            RETURN DISTINCT a.name AS source, b.name AS target, r.relation AS relation
-            LIMIT 100
+            MATCH (e:Entity {corpus_id: $cid})
+            WHERE toLower(e.name) = toLower(name) OR toLower(e.name) CONTAINS toLower(name)
+            RETURN DISTINCT e.name AS id, coalesce(e.type, 'OTHER') AS type
+            LIMIT 25
             """,
-            names=seed_ids,
+            names=seed_names,
             cid=corpus_id,
         )
-        if seed_ids
-        else []
-    )
-    neighbour_ids = sorted({e["target"] for e in edges} | {e["source"] for e in edges} - set(seed_ids))
-    return {
-        "query": q,
-        "extracted_entities": seed_names,
-        "seed_nodes": seed_ids,
-        "neighbor_nodes": neighbour_ids,
-        "edges": edges,
-    }
+        if matched:
+            seed_ids = [row["id"] for row in matched]
+            edges = store._run(
+                """
+                UNWIND $names AS name
+                MATCH (a:Entity {name: name, corpus_id: $cid})-[r:RELATES_TO]-(b:Entity {corpus_id: $cid})
+                RETURN DISTINCT a.name AS source, b.name AS target, r.relation AS relation
+                LIMIT 100
+                """,
+                names=seed_ids,
+                cid=corpus_id,
+            )
+            neighbour_ids = sorted(
+                {e["target"] for e in edges} | {e["source"] for e in edges} - set(seed_ids)
+            )
+            return {
+                "query": q,
+                "extracted_entities": seed_names,
+                "seed_nodes": seed_ids,
+                "neighbor_nodes": neighbour_ids,
+                "edges": edges,
+            }
+    gs, _ = _local_graph_store(corpus_id)
+    if gs is None:
+        raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
+    return local_graph.graph_query_path(gs, seed_names, q)
 
 
 @app.get("/graph/{corpus_id}/entity/{entity_name}")
 def graph_entity(corpus_id: str, entity_name: str) -> dict[str, Any]:
     """One entity's metadata, neighbours (with relation types), and chunks."""
+    # Neo4j first; fall back to the local graph when it's down OR when this
+    # corpus/entity isn't in Neo4j yet (live-but-empty).
     store = _neo4j()
-    if not store.available():
-        gs, chunks = _local_graph_store(corpus_id)
-        result = local_graph.graph_entity(gs, entity_name, chunks) if gs is not None else None
-        if result is None:
-            raise HTTPException(
-                status_code=404, detail=f"Entity '{entity_name}' not found in corpus"
+    if store.available():
+        meta = store._run(
+            """
+            MATCH (e:Entity {corpus_id: $cid})
+            WHERE toLower(e.name) = toLower($name)
+            RETURN e.name AS name, coalesce(e.type, 'OTHER') AS type,
+                   coalesce(e.description, '') AS description,
+                   coalesce(e.confidence, 0.0) AS confidence
+            LIMIT 1
+            """,
+            cid=corpus_id,
+            name=entity_name,
+        )
+        if meta:
+            canonical = meta[0]["name"]
+            neighbours = store._run(
+                """
+                MATCH (e:Entity {name: $name, corpus_id: $cid})-[r:RELATES_TO]-(nbr:Entity)
+                RETURN DISTINCT nbr.name AS name, coalesce(nbr.type, 'OTHER') AS type,
+                       r.relation AS relation,
+                       CASE WHEN startNode(r) = e THEN 'out' ELSE 'in' END AS direction
+                LIMIT 50
+                """,
+                name=canonical,
+                cid=corpus_id,
             )
-        return result
-    meta = store._run(
-        """
-        MATCH (e:Entity {corpus_id: $cid})
-        WHERE toLower(e.name) = toLower($name)
-        RETURN e.name AS name, coalesce(e.type, 'OTHER') AS type,
-               coalesce(e.description, '') AS description,
-               coalesce(e.confidence, 0.0) AS confidence
-        LIMIT 1
-        """,
-        cid=corpus_id,
-        name=entity_name,
-    )
-    if not meta:
+            chunks = store._run(
+                """
+                MATCH (e:Entity {name: $name, corpus_id: $cid})-[:MENTIONED_IN]->(c:Chunk)
+                RETURN c.chunk_id AS chunk_id, c.text AS text, c.source AS source
+                LIMIT 20
+                """,
+                name=canonical,
+                cid=corpus_id,
+            )
+            return {"entity": meta[0], "neighbors": neighbours, "chunks": chunks}
+    gs, chunks = _local_graph_store(corpus_id)
+    result = local_graph.graph_entity(gs, entity_name, chunks) if gs is not None else None
+    if result is None:
         raise HTTPException(status_code=404, detail=f"Entity '{entity_name}' not found in corpus")
-    canonical = meta[0]["name"]
-    neighbours = store._run(
-        """
-        MATCH (e:Entity {name: $name, corpus_id: $cid})-[r:RELATES_TO]-(nbr:Entity)
-        RETURN DISTINCT nbr.name AS name, coalesce(nbr.type, 'OTHER') AS type,
-               r.relation AS relation,
-               CASE WHEN startNode(r) = e THEN 'out' ELSE 'in' END AS direction
-        LIMIT 50
-        """,
-        name=canonical,
-        cid=corpus_id,
-    )
-    chunks = store._run(
-        """
-        MATCH (e:Entity {name: $name, corpus_id: $cid})-[:MENTIONED_IN]->(c:Chunk)
-        RETURN c.chunk_id AS chunk_id, c.text AS text, c.source AS source
-        LIMIT 20
-        """,
-        name=canonical,
-        cid=corpus_id,
-    )
-    return {"entity": meta[0], "neighbors": neighbours, "chunks": chunks}
+    return result
 
 
 @app.get("/graph/{corpus_id}/stats")
 def graph_stats(corpus_id: str) -> dict[str, Any]:
     """Corpus graph statistics: type histograms + most connected entities."""
+    # Neo4j first; fall back to the local graph when it's down OR when this
+    # corpus hasn't been synced into Neo4j yet (live-but-empty).
     store = _neo4j()
-    if not store.available():
-        gs, _ = _local_graph_store(corpus_id)
-        result = local_graph.graph_stats(gs) if gs is not None else None
-        if result is None:
-            raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
-        return result
-    nodes_by_type = store._run(
-        """
-        MATCH (e:Entity {corpus_id: $cid})
-        RETURN coalesce(e.type, 'OTHER') AS type, count(e) AS count
-        ORDER BY count DESC
-        """,
-        cid=corpus_id,
-    )
-    rels_by_type = store._run(
-        """
-        MATCH (:Entity {corpus_id: $cid})-[r:RELATES_TO]->(:Entity {corpus_id: $cid})
-        RETURN r.relation AS relation, count(r) AS count
-        ORDER BY count DESC
-        LIMIT 25
-        """,
-        cid=corpus_id,
-    )
-    chunk_count = store._run(
-        "MATCH (c:Chunk {corpus_id: $cid}) RETURN count(c) AS c", cid=corpus_id
-    )
-    top_entities = store._run(
-        """
-        MATCH (e:Entity {corpus_id: $cid})
-        OPTIONAL MATCH (e)-[r]-()
-        WITH e, count(r) AS degree
-        RETURN e.name AS name, coalesce(e.type, 'OTHER') AS type, degree
-        ORDER BY degree DESC
-        LIMIT 10
-        """,
-        cid=corpus_id,
-    )
-    if not nodes_by_type and not chunk_count:
+    if store.available():
+        nodes_by_type = store._run(
+            """
+            MATCH (e:Entity {corpus_id: $cid})
+            RETURN coalesce(e.type, 'OTHER') AS type, count(e) AS count
+            ORDER BY count DESC
+            """,
+            cid=corpus_id,
+        )
+        chunk_count = store._run("MATCH (c:Chunk {corpus_id: $cid}) RETURN count(c) AS c", cid=corpus_id)
+        if nodes_by_type or chunk_count:
+            rels_by_type = store._run(
+                """
+                MATCH (:Entity {corpus_id: $cid})-[r:RELATES_TO]->(:Entity {corpus_id: $cid})
+                RETURN r.relation AS relation, count(r) AS count
+                ORDER BY count DESC
+                LIMIT 25
+                """,
+                cid=corpus_id,
+            )
+            top_entities = store._run(
+                """
+                MATCH (e:Entity {corpus_id: $cid})
+                OPTIONAL MATCH (e)-[r]-()
+                WITH e, count(r) AS degree
+                RETURN e.name AS name, coalesce(e.type, 'OTHER') AS type, degree
+                ORDER BY degree DESC
+                LIMIT 10
+                """,
+                cid=corpus_id,
+            )
+            return {
+                "corpus_id": corpus_id,
+                "nodes_by_type": {row["type"]: int(row["count"]) for row in nodes_by_type},
+                "relationships_by_type": {str(row["relation"]): int(row["count"]) for row in rels_by_type},
+                "total_chunks": int(chunk_count[0]["c"]) if chunk_count else 0,
+                "top_connected_entities": top_entities,
+            }
+    gs, _ = _local_graph_store(corpus_id)
+    result = local_graph.graph_stats(gs) if gs is not None else None
+    if result is None:
         raise HTTPException(status_code=404, detail=f"No graph data for corpus '{corpus_id}'")
-    return {
-        "corpus_id": corpus_id,
-        "nodes_by_type": {row["type"]: int(row["count"]) for row in nodes_by_type},
-        "relationships_by_type": {str(row["relation"]): int(row["count"]) for row in rels_by_type},
-        "total_chunks": int(chunk_count[0]["c"]) if chunk_count else 0,
-        "top_connected_entities": top_entities,
-    }
+    return result
 
 
 _UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".docx", ".html", ".htm"}
@@ -557,6 +557,21 @@ def _extract_docx_text(path: Path) -> str:
             if cells:
                 parts.append(" | ".join(cells))
     return "\n".join(parts)
+
+
+def _extract_html_text(path: Path) -> str:
+    """Plain-text extraction from a local HTML file.
+
+    Uploaded ``.html`` files would otherwise be ingested with their raw tags
+    (the loader only cleans HTML fetched from URLs). Strip scripts/styles and
+    boilerplate so the extractor sees prose, matching URL-ingest quality.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(path.read_text(encoding="utf-8", errors="ignore"), "html.parser")
+    for tag in soup(["script", "style", "noscript", "nav", "header", "footer"]):
+        tag.decompose()
+    return "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
 
 
 @app.post("/ingest/file")
@@ -586,7 +601,8 @@ def ingest_file(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to store upload: {exc}") from exc
 
-    # DOCX has no loader support — convert to plain text alongside.
+    # DOCX / HTML have no clean loader path for local files — convert to plain
+    # text alongside so the extractor sees prose, not markup.
     ingest_path = target
     if suffix == ".docx":
         try:
@@ -595,6 +611,15 @@ def ingest_file(
             raise HTTPException(status_code=422, detail=f"Could not read DOCX: {exc}") from exc
         if not text.strip():
             raise HTTPException(status_code=422, detail="DOCX contained no extractable text")
+        ingest_path = target.with_suffix(".txt")
+        ingest_path.write_text(text, encoding="utf-8")
+    elif suffix in {".html", ".htm"}:
+        try:
+            text = _extract_html_text(target)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not read HTML: {exc}") from exc
+        if not text.strip():
+            raise HTTPException(status_code=422, detail="HTML contained no extractable text")
         ingest_path = target.with_suffix(".txt")
         ingest_path.write_text(text, encoding="utf-8")
 

@@ -354,7 +354,9 @@ class GraphRAGPipeline:
         schema_entities = [
             Entity(
                 name=entity.text,
-                type=EntityType(entity.entity_type.upper() if entity.entity_type.upper() in valid_types else "OTHER"),
+                type=EntityType(
+                    entity.entity_type.upper() if entity.entity_type.upper() in valid_types else "OTHER"
+                ),
                 confidence=float(entity.confidence),
             )
             for entity in entities
@@ -376,9 +378,7 @@ class GraphRAGPipeline:
             }
             for chunk in chunks
         ]
-        link_rows = [
-            {"entity_name": entity.text, "chunk_id": entity.source_chunk_id} for entity in entities
-        ]
+        link_rows = [{"entity_name": entity.text, "chunk_id": entity.source_chunk_id} for entity in entities]
 
         store.add_chunks_batch(chunk_rows, corpus_id)
         store.add_entities_batch(schema_entities, corpus_id)

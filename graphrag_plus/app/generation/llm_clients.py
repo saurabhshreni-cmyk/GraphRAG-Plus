@@ -45,6 +45,12 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL_DEFAULT = "claude-3-5-haiku-latest"
 ANTHROPIC_VERSION = "2023-06-01"
 
+# Groq — OpenAI-compatible chat completions. Free tier, fast. Activated when
+# ``GROQ_API_KEY`` is set. This is the recommended cloud LLM for deployments
+# where a local Ollama isn't available (e.g. Hugging Face Spaces / any PaaS).
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 # Base URL comes from OLLAMA_BASE_URL (.env); OLLAMA_URL may override the
 # full generate endpoint directly.
 OLLAMA_BASE_URL_DEFAULT = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -206,6 +212,86 @@ class AnthropicClient:
         return " ".join(part.strip() for part in text_parts if part.strip())
 
 
+class GroqClient:
+    """Groq OpenAI-compatible chat-completions client.
+
+    Uses ``urllib`` (no SDK dependency). Reads the key from the constructor or
+    the ``GROQ_API_KEY`` env var, and the model from ``GROQ_MODEL`` (default
+    ``llama-3.3-70b-versatile``). ``timeout_s`` caps the request so a slow API
+    never blocks the event loop. On any HTTP/timeout/decode error it raises so
+    the caller falls back to extractive output — identical policy to the other
+    real clients.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str = GROQ_MODEL_DEFAULT,
+        max_tokens: int = 400,
+        timeout_s: float = 20.0,
+    ):
+        resolved = api_key or os.environ.get("GROQ_API_KEY")
+        if not resolved:
+            raise ValueError("GroqClient requires an api_key argument or GROQ_API_KEY env var.")
+        self.api_key: str = resolved
+        self.model = model
+        self.max_tokens = max_tokens
+        self.timeout_s = timeout_s
+
+    def complete(self, question: str, context: str) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": 0.0,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Question:\n{question}\n\n"
+                        f"Context (numbered snippets):\n{context}\n\n"
+                        "Answer using only the snippets above."
+                    ),
+                },
+            ],
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            GROQ_API_URL,
+            data=data,
+            method="POST",
+            headers={
+                "authorization": f"Bearer {self.api_key}",
+                "content-type": "application/json",
+            },
+        )
+        try:
+            # URL is hard-coded to api.groq.com (constant above).
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8")[:300]
+            except Exception:  # pragma: no cover - defensive
+                detail = ""
+            logger.warning("groq.request_failed status=%s detail=%s", exc.code, detail)
+            raise
+        except (urllib.error.URLError, TimeoutError) as exc:
+            logger.warning("groq.request_failed error=%s", exc)
+            raise
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError as exc:
+            logger.warning("groq.decode_failed error=%s body=%r", exc, body[:200])
+            raise
+        choices = parsed.get("choices", [])
+        if not choices:
+            return ""
+        content = str(choices[0].get("message", {}).get("content", ""))
+        return postprocess_llm_answer(content)
+
+
 class LocalLLMClient:
     """Ollama-backed local LLM client.
 
@@ -307,9 +393,12 @@ def build_default_llm_client(*, llm_enabled: bool) -> LLMClient | None:
     Order of preference:
 
     1. ``llm_enabled=False`` -> ``None`` (pure-extractive cold path).
-    2. ``OLLAMA_URL`` set or a daemon running on the default URL -> :class:`LocalLLMClient`.
-    3. ``ANTHROPIC_API_KEY`` set -> :class:`AnthropicClient`.
-    4. :class:`EchoClient` so the LLM-enabled path still runs in dev / CI
+    2. ``OLLAMA_URL`` set or a daemon running on the default URL -> :class:`LocalLLMClient`
+       (the local-first path — full quality on a dev machine).
+    3. ``GROQ_API_KEY`` set -> :class:`GroqClient` (recommended for cloud/PaaS
+       deployments with no local Ollama; free + fast).
+    4. ``ANTHROPIC_API_KEY`` set -> :class:`AnthropicClient`.
+    5. :class:`EchoClient` so the LLM-enabled path still runs in dev / CI
        without external dependencies.
     """
     if not llm_enabled:
@@ -320,6 +409,11 @@ def build_default_llm_client(*, llm_enabled: bool) -> LLMClient | None:
             return LocalLLMClient()
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("llm.local_init_failed error=%s", exc)
+    if os.environ.get("GROQ_API_KEY"):
+        try:
+            return GroqClient()
+        except ValueError as exc:
+            logger.warning("llm.groq_init_failed error=%s", exc)
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             return AnthropicClient()
@@ -333,6 +427,7 @@ __all__ = [
     "LLM_ABSTAIN_TOKEN_ALT",
     "AnthropicClient",
     "EchoClient",
+    "GroqClient",
     "LLMClient",
     "LocalLLMClient",
     "build_default_llm_client",

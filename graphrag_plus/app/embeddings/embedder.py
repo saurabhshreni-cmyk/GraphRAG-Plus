@@ -38,9 +38,7 @@ def _default_model_name() -> str:
 
 def _dimension_of(model: Any) -> int:
     """Embedding dim across sentence-transformers versions (method renamed in v5)."""
-    getter = getattr(model, "get_embedding_dimension", None) or getattr(
-        model, "get_sentence_embedding_dimension"
-    )
+    getter = getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension
     return int(getter())
 
 

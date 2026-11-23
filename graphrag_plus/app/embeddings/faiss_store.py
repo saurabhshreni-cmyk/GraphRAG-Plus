@@ -113,9 +113,7 @@ class FAISSStore:
         with self._lock:
             faiss.write_index(self._get_index(), str(target))
             meta = {"dimension": self.dimension, "chunk_ids": self.chunk_ids}
-            target.with_suffix(target.suffix + ".meta.json").write_text(
-                json.dumps(meta), encoding="utf-8"
-            )
+            target.with_suffix(target.suffix + ".meta.json").write_text(json.dumps(meta), encoding="utf-8")
         logger.info("faiss.saved path=%s vectors=%d", path, len(self.chunk_ids))
 
     def load(self, path: str) -> bool:

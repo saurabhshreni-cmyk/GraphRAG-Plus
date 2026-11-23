@@ -212,7 +212,9 @@ class RetrievalService:
             store = FAISSStore(dimension=embedder.dimension)
             embeddings = embedder.embed_batch([chunk.text for chunk in chunks])
             if len(embeddings) != len(chunks):
-                logger.warning("retrieval.faiss_embed_incomplete got=%d want=%d", len(embeddings), len(chunks))
+                logger.warning(
+                    "retrieval.faiss_embed_incomplete got=%d want=%d", len(embeddings), len(chunks)
+                )
                 return
             store.add_batch(chunk_ids, embeddings)
             self.faiss_store = store
@@ -362,16 +364,12 @@ class RetrievalService:
 
             # Graph: Neo4j weight (already 0..1) blended with normalized
             # local overlap; take the max so either source can carry it.
-            local_component = (
-                local_graph_hits.get(chunk.chunk_id, 0.0) / local_max if local_max > 0 else 0.0
-            )
+            local_component = local_graph_hits.get(chunk.chunk_id, 0.0) / local_max if local_max > 0 else 0.0
             graph_signal = max(neo4j_scores.get(chunk.chunk_id, 0.0), local_component)
 
             if semantic_is_faiss:
                 blended = (
-                    _W_BM25_HYBRID * keyword
-                    + _W_SEMANTIC_HYBRID * semantic
-                    + _W_GRAPH_HYBRID * graph_signal
+                    _W_BM25_HYBRID * keyword + _W_SEMANTIC_HYBRID * semantic + _W_GRAPH_HYBRID * graph_signal
                 )
             else:
                 blended = _W_COSINE * semantic + _W_BM25 * keyword

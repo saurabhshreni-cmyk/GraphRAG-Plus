@@ -54,3 +54,8 @@ frontend/dist/
 frontend/.vite/
 
 .vercel
+
+# Derived per-corpus vector indexes (rebuilt from stored vectors on load)
+*.faiss.index
+faiss.index
+faiss.index.meta.json

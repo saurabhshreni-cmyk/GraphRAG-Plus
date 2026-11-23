@@ -76,7 +76,7 @@ def _health_check() -> dict:
 
     # Import checks (report missing deps instead of crashing).
     try:
-        from graphrag_plus.app.config.settings import get_settings  # noqa: PLC0415
+        from graphrag_plus.app.config.settings import get_settings
     except Exception as exc:
         issues.append(f"settings_import_error: {exc}")
         status = "degraded"
@@ -89,7 +89,7 @@ def _health_check() -> dict:
         issues.append(f"settings_validation_error: {exc}")
 
     try:
-        from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: PLC0415
+        from graphrag_plus.app.pipeline import GraphRAGPipeline
     except Exception as exc:
         issues.append(f"pipeline_import_error: {exc}")
         status = "degraded"
@@ -151,12 +151,12 @@ def main() -> None:
         return
 
     # Lazy imports so `health_check` can run even when dependencies are missing.
-    from graphrag_plus.app.evaluation.runner import (  # noqa: PLC0415
+    from graphrag_plus.app.evaluation.runner import (
         evaluate_stub,
         run_ablation_matrix,
     )
-    from graphrag_plus.app.pipeline import GraphRAGPipeline  # noqa: PLC0415
-    from graphrag_plus.app.schemas.models import QueryRequest  # noqa: PLC0415
+    from graphrag_plus.app.pipeline import GraphRAGPipeline
+    from graphrag_plus.app.schemas.models import QueryRequest
 
     settings = get_settings()
     pipeline = GraphRAGPipeline(settings)
