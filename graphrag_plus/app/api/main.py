@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from graphrag_plus.app.api.rate_limit import RateLimiter, client_key
 from graphrag_plus.app.config.settings import get_settings
 from graphrag_plus.app.corpus.blob_store import make_blob_store
 from graphrag_plus.app.corpus.seed import seed_demo_corpus
@@ -60,6 +61,31 @@ _origins = [
     for origin in os.environ.get("GRAPHRAG_CORS_ORIGINS", _default_origins).split(",")
     if origin.strip()
 ]
+
+# Rate limiting for quota-spending routes. Registered BEFORE CORSMiddleware on
+# purpose: Starlette makes the last-added middleware the outermost, so CORS
+# wraps this one and a 429 still carries Access-Control-Allow-Origin. Without
+# that the browser would hide the message and show "Failed to fetch".
+_rate_limiter = RateLimiter()
+
+
+@app.middleware("http")
+async def _rate_limit(request: Request, call_next: Any) -> Any:
+    if request.method != "OPTIONS" and os.environ.get("GRAPHRAG_RATE_LIMIT", "1") != "0":
+        peer = request.client.host if request.client else "unknown"
+        retry_after = _rate_limiter.check(client_key(dict(request.headers), peer), request.url.path)
+        if retry_after is not None:
+            wait = max(1, int(retry_after + 0.999))
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": f"Too many requests — this public demo is rate-limited. Try again in {wait}s."
+                },
+                headers={"Retry-After": str(wait)},
+            )
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins or ["*"],
@@ -543,6 +569,11 @@ def graph_stats(corpus_id: str) -> dict[str, Any]:
 
 
 _UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".docx", ".html", ".htm"}
+# Vercel rejects request bodies over 4.5 MB at its edge, before this code runs,
+# with an opaque 413 the frontend can't explain. Capping slightly lower here
+# (multipart framing adds overhead) means a too-large file gets a clear,
+# actionable message instead. Overridable for hosts without that limit.
+_MAX_UPLOAD_BYTES = int(os.environ.get("GRAPHRAG_MAX_UPLOAD_BYTES", str(4_000_000)))
 
 
 def _extract_docx_text(path: Path) -> str:
@@ -591,13 +622,29 @@ def ingest_file(
             status_code=415,
             detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(_UPLOAD_EXTENSIONS)}",
         )
+    # Read at most one byte past the cap: enough to detect an oversized upload
+    # without buffering an arbitrarily large body into memory.
+    try:
+        payload = file.file.read(_MAX_UPLOAD_BYTES + 1)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read upload: {exc}") from exc
+    if len(payload) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File is larger than {_MAX_UPLOAD_BYTES // 1_000_000} MB. "
+                "Split it into smaller documents and upload them into the same corpus."
+            ),
+        )
+    if not payload:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     upload_dir = settings.temp_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     safe_stem = "".join(ch for ch in Path(file.filename or "upload").stem if ch.isalnum() or ch in "-_ ")[:60]
     target = upload_dir / f"{job_id}_{safe_stem}{suffix}"
     try:
-        target.write_bytes(file.file.read())
+        target.write_bytes(payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to store upload: {exc}") from exc
 
