@@ -20,6 +20,9 @@ README.md
 deploy
 Dockerfile
 .dockerignore
+# The container entrypoint. Vercel serves the app from the root index.py; if
+# api/ shipped, Vercel would also build it as a separate legacy function.
+api
 
 # Local runtime state — only the committed demo corpus ships.
 graphrag_plus/.cache
