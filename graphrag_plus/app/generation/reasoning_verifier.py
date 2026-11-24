@@ -298,7 +298,9 @@ class GroqReasoningVerifier:
         payload: dict[str, Any] = {
             "model": self.model,
             "temperature": 0.0,
-            "max_tokens": 2048,
+            # High reasoning effort can spend thousands of hidden tokens before
+            # the verdict; 2048 risked truncating it to an empty reply.
+            "max_tokens": 4096,
             "reasoning_effort": self.reasoning_effort,
             # Mutually exclusive with reasoning_format; sending both is a 400.
             "include_reasoning": True,

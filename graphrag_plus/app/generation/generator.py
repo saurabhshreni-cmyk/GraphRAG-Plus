@@ -31,12 +31,16 @@ import re
 from collections import Counter
 from typing import TYPE_CHECKING, Protocol, cast
 
+from graphrag_plus.app.utils.logging_utils import get_logger
+
 if TYPE_CHECKING:
     from graphrag_plus.app.models.schemas import AnswerResult
 
 # Sentinel strings the LLM is instructed to emit when evidence doesn't cover
 # the question. Detecting them lets us fall back to extractive output instead
 # of returning a verbatim refusal that the user can't act on.
+logger = get_logger(__name__)
+
 LLM_ABSTAIN_TOKEN = "I cannot answer based on the provided context."
 LLM_ABSTAIN_TOKEN_ALT = "I don't have enough information to answer this."
 
@@ -901,13 +905,15 @@ class AnswerGenerator:
             return extractive, False, False
         try:
             llm_answer = self._llm_answer(question, evidence)
-        except Exception:
+        except Exception as exc:
             # LLM raised (timeout / connection / decode) -> extractive fallback,
             # surface llm_failed=True in the flags for observability.
+            logger.warning("generator.llm_fallback reason=error error=%s", str(exc)[:200])
             return extractive, False, True
 
         if not llm_answer:
             # Empty response -> soft failure, fall back to extractive.
+            logger.warning("generator.llm_fallback reason=empty_response")
             return extractive, False, True
 
         # The LLM was instructed to emit a fixed abstain string when the
@@ -918,11 +924,13 @@ class AnswerGenerator:
         lowered_answer = llm_answer.lower()
         for abstain in (LLM_ABSTAIN_TOKEN, LLM_ABSTAIN_TOKEN_ALT):
             if abstain.lower().rstrip(".") in lowered_answer:
+                logger.info("generator.llm_fallback reason=abstained")
                 return extractive, False, True
 
         # Quality filter: reject completions that are neither on-topic nor
         # grounded in the retrieved evidence.
         if not self._llm_answer_passes_quality(question, llm_answer, self._build_context(evidence)):
+            logger.info("generator.llm_fallback reason=quality_reject answer=%r", llm_answer[:120])
             return extractive, False, True
 
         return llm_answer, True, False
