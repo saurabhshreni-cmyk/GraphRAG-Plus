@@ -20,8 +20,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_DATA = Path("/tmp/graphrag/data")  # noqa: S108 - the only writable dir on these hosts
-_CACHE = Path("/tmp/graphrag/.cache")  # noqa: S108
+_DATA = Path("/tmp/graphrag/data")
+_CACHE = Path("/tmp/graphrag/.cache")
 
 _PATH_DEFAULTS: dict[str, Path] = {
     "GRAPHRAG_DATA_DIR": _DATA,
