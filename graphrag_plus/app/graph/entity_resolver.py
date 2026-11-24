@@ -1,4 +1,9 @@
-"""Entity resolution — merge duplicate entity nodes in Neo4j.
+"""Entity resolution — merge duplicate entity nodes.
+
+Backend-agnostic planning lives in :func:`plan_entity_merges`; this module's
+:class:`EntityResolver` applies the plan inside Neo4j, and
+:mod:`graphrag_plus.app.graph.local_resolver` applies the same plan to the
+local NetworkX graph, so dedup holds whichever backend serves the graph.
 
 The #1 production GraphRAG failure mode: the same real-world entity stored
 as "Tim Cook", "T. Cook", and "Timothy Cook" fragments the graph into three
@@ -21,6 +26,7 @@ deleted. A union-find keeps chains (A→B, B→C) consistent.
 
 from __future__ import annotations
 
+import os
 import time
 from difflib import SequenceMatcher
 from typing import Any
@@ -32,7 +38,16 @@ from graphrag_plus.app.utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 _STRING_THRESHOLD = 0.85
+# Measured on BAAI/bge-large-en-v1.5 name embeddings.
 _EMBEDDING_THRESHOLD = 0.92
+# Used for any backend the 0.92 figure was NOT measured on (e.g. a hosted API).
+# Cosine baselines differ between embedding models, and a false merge ("Google"
+# folded into "Microsoft") corrupts the graph far worse than a missed one, so
+# an uncalibrated backend gets a stricter bar. Override with
+# GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD after running
+# scripts/calibrate_backend.py against that backend.
+_UNCALIBRATED_EMBEDDING_THRESHOLD = 0.95
+_THRESHOLD_ENV = "GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD"
 # Names shorter than this are too ambiguous to auto-merge ("AI" vs "Al").
 _MIN_NAME_LEN = 3
 
@@ -67,6 +82,141 @@ class _UnionFind:
         self.parent[self.find(duplicate)] = self.find(canonical)
 
 
+def embedding_threshold_for(embedder: Any) -> float:
+    """Cosine bar for the embedding merge pass, chosen per backend.
+
+    An explicit GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD wins. Otherwise the
+    measured 0.92 applies only to the BGE model it was measured on; every
+    other backend gets the stricter uncalibrated bar.
+    """
+    override = os.environ.get(_THRESHOLD_ENV, "").strip()
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            logger.warning("resolver.bad_threshold_env value=%r - using default", override)
+    model_name = str(getattr(embedder, "model_name", "") or "").lower()
+    return _EMBEDDING_THRESHOLD if "bge" in model_name else _UNCALIBRATED_EMBEDDING_THRESHOLD
+
+
+def _string_pass(entities: list[dict[str, str]], uf: _UnionFind) -> list[tuple[str, str, float]]:
+    """SequenceMatcher over same-type pairs. Returns (dup, canon, sim)."""
+    merges: list[tuple[str, str, float]] = []
+    by_type: dict[str, list[str]] = {}
+    for row in entities:
+        by_type.setdefault(row["type"], []).append(row["name"])
+
+    for names in by_type.values():
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a, b = names[i], names[j]
+                if uf.find(a) == uf.find(b):
+                    continue
+                if min(len(a), len(b)) < _MIN_NAME_LEN:
+                    continue
+                similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+                if a.lower() == b.lower():
+                    similarity = 1.0
+                elif _is_token_prefix(a, b):
+                    # "Apple" ⊂ "Apple Incorporated": same-type token-prefix
+                    # containment is a corporate/person alias with near
+                    # certainty even when the char-level ratio is low.
+                    similarity = max(similarity, 0.90)
+                if similarity <= _STRING_THRESHOLD:
+                    continue
+                duplicate, canonical = (a, b) if len(a) < len(b) else (b, a)
+                uf.union(duplicate, canonical)
+                merges.append((duplicate, canonical, similarity))
+    return merges
+
+
+def _embedding_pass(
+    entities: list[dict[str, str]],
+    uf: _UnionFind,
+    already_merged: set[str],
+    embedder: Any,
+    threshold: float,
+) -> list[tuple[str, str, float]]:
+    """Cosine similarity of name embeddings over surviving same-type pairs."""
+    survivors = [row for row in entities if row["name"] not in already_merged]
+    if len(survivors) < 2 or embedder is None:
+        return []
+    try:
+        if not embedder.available():
+            return []
+        vectors = embedder.embed_batch([row["name"] for row in survivors])
+        if len(vectors) != len(survivors):
+            return []
+    except Exception as exc:
+        logger.warning("resolver.embedding_pass_failed error=%s", str(exc)[:150])
+        return []
+
+    matrix = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    matrix = matrix / norms
+    similarity_matrix = matrix @ matrix.T
+
+    merges: list[tuple[str, str, float]] = []
+    for i in range(len(survivors)):
+        for j in range(i + 1, len(survivors)):
+            if survivors[i]["type"] != survivors[j]["type"]:
+                continue
+            a, b = survivors[i]["name"], survivors[j]["name"]
+            if uf.find(a) == uf.find(b):
+                continue
+            if min(len(a), len(b)) < _MIN_NAME_LEN:
+                continue
+            similarity = float(similarity_matrix[i, j])
+            if similarity <= threshold:
+                continue
+            duplicate, canonical = (a, b) if len(a) < len(b) else (b, a)
+            uf.union(duplicate, canonical)
+            merges.append((duplicate, canonical, similarity))
+    return merges
+
+
+def plan_entity_merges(entities: list[dict[str, str]], embedder: Any) -> list[dict[str, Any]]:
+    """Decide which entities merge into which, without touching any store.
+
+    ``entities`` are ``{"name", "type"}`` rows. Returns one
+    ``{"duplicate", "canonical", "similarity"}`` record per node to fold away.
+
+    Merging is by union-find CLUSTER, not by recorded pair: chains like
+    Apple -> Apple Inc -> Apple Incorporated must fully collapse even when a
+    pair was linked only transitively. Canonical = the longest (most complete)
+    name in the cluster. Backend-agnostic, so Neo4j and the local NetworkX
+    graph dedupe identically.
+    """
+    if len(entities) < 2:
+        return []
+    uf = _UnionFind()
+    pairs = _string_pass(entities, uf)
+    pairs += _embedding_pass(
+        entities,
+        uf,
+        already_merged={d for d, _, _ in pairs},
+        embedder=embedder,
+        threshold=embedding_threshold_for(embedder),
+    )
+    similarity_of = {frozenset((d, c)): s for d, c, s in pairs}
+
+    clusters: dict[str, list[str]] = {}
+    for row in entities:
+        clusters.setdefault(uf.find(row["name"]), []).append(row["name"])
+    plan: list[dict[str, Any]] = []
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        canonical = max(members, key=len)
+        for duplicate in members:
+            if duplicate == canonical:
+                continue
+            similarity = similarity_of.get(frozenset((duplicate, canonical)), 0.9)
+            plan.append({"duplicate": duplicate, "canonical": canonical, "similarity": round(similarity, 3)})
+    return plan
+
+
 class EntityResolver:
     """Deduplicate Entity nodes for a corpus inside Neo4j."""
 
@@ -76,7 +226,7 @@ class EntityResolver:
 
     # ---------------------------------------------------------------- public
     def resolve_corpus(self, corpus_id: str) -> dict[str, Any]:
-        """Run both strategies; returns merge stats.
+        """Plan merges, apply them in Neo4j; returns merge stats.
 
         Never raises — any failure logs and returns partial stats so
         ingestion is never blocked by resolution.
@@ -84,123 +234,21 @@ class EntityResolver:
         start = time.perf_counter()
         result: dict[str, Any] = {"merged_count": 0, "canonical_pairs": [], "time_taken_s": 0.0}
         try:
-            entities = self._fetch_entities(corpus_id)
-            if len(entities) < 2:
-                result["time_taken_s"] = round(time.perf_counter() - start, 2)
-                return result
-
-            uf = _UnionFind()
-            pairs = self._string_pass(entities, uf)
-            pairs += self._embedding_pass(entities, uf, already_merged={d for d, _, _ in pairs})
-            similarity_of = {frozenset((d, c)): s for d, c, s in pairs}
-
-            # Merge by union-find CLUSTER, not by recorded pair: chains like
-            # Apple → Apple Inc → Apple Incorporated must fully collapse even
-            # when a pair was linked only transitively. Canonical = the
-            # longest (most complete) name in the cluster.
-            clusters: dict[str, list[str]] = {}
-            for row in entities:
-                clusters.setdefault(uf.find(row["name"]), []).append(row["name"])
-            for members in clusters.values():
-                if len(members) < 2:
-                    continue
-                canonical = max(members, key=len)
-                for duplicate in members:
-                    if duplicate == canonical:
-                        continue
-                    similarity = similarity_of.get(frozenset((duplicate, canonical)), 0.9)
-                    self._merge_nodes(duplicate, canonical, corpus_id)
-                    result["canonical_pairs"].append(
-                        {
-                            "duplicate": duplicate,
-                            "canonical": canonical,
-                            "similarity": round(similarity, 3),
-                        }
-                    )
-                    logger.info(
-                        "resolver.merged corpus=%s [%s] -> [%s] (similarity: %.3f)",
-                        corpus_id,
-                        duplicate,
-                        canonical,
-                        similarity,
-                    )
+            for merge in plan_entity_merges(self._fetch_entities(corpus_id), self.embedder):
+                self._merge_nodes(merge["duplicate"], merge["canonical"], corpus_id)
+                result["canonical_pairs"].append(merge)
+                logger.info(
+                    "resolver.merged corpus=%s [%s] -> [%s] (similarity: %.3f)",
+                    corpus_id,
+                    merge["duplicate"],
+                    merge["canonical"],
+                    merge["similarity"],
+                )
             result["merged_count"] = len(result["canonical_pairs"])
         except Exception as exc:
             logger.warning("resolver.failed corpus=%s error=%s", corpus_id, str(exc)[:200])
         result["time_taken_s"] = round(time.perf_counter() - start, 2)
         return result
-
-    # ------------------------------------------------------------- strategies
-    def _string_pass(self, entities: list[dict[str, str]], uf: _UnionFind) -> list[tuple[str, str, float]]:
-        """SequenceMatcher over same-type pairs. Returns (dup, canon, sim)."""
-        merges: list[tuple[str, str, float]] = []
-        by_type: dict[str, list[str]] = {}
-        for row in entities:
-            by_type.setdefault(row["type"], []).append(row["name"])
-
-        for names in by_type.values():
-            for i in range(len(names)):
-                for j in range(i + 1, len(names)):
-                    a, b = names[i], names[j]
-                    if uf.find(a) == uf.find(b):
-                        continue
-                    if min(len(a), len(b)) < _MIN_NAME_LEN:
-                        continue
-                    similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
-                    if a.lower() == b.lower():
-                        similarity = 1.0
-                    elif _is_token_prefix(a, b):
-                        # "Apple" ⊂ "Apple Incorporated": same-type token-prefix
-                        # containment is a corporate/person alias with near
-                        # certainty even when the char-level ratio is low.
-                        similarity = max(similarity, 0.90)
-                    if similarity <= _STRING_THRESHOLD:
-                        continue
-                    duplicate, canonical = (a, b) if len(a) < len(b) else (b, a)
-                    uf.union(duplicate, canonical)
-                    merges.append((duplicate, canonical, similarity))
-        return merges
-
-    def _embedding_pass(
-        self, entities: list[dict[str, str]], uf: _UnionFind, already_merged: set[str]
-    ) -> list[tuple[str, str, float]]:
-        """Cosine similarity of name embeddings over surviving same-type pairs."""
-        survivors = [row for row in entities if row["name"] not in already_merged]
-        if len(survivors) < 2:
-            return []
-        try:
-            if not self.embedder.available():
-                return []
-            vectors = self.embedder.embed_batch([row["name"] for row in survivors])
-            if len(vectors) != len(survivors):
-                return []
-        except Exception as exc:
-            logger.warning("resolver.embedding_pass_failed error=%s", str(exc)[:150])
-            return []
-
-        matrix = np.asarray(vectors, dtype=np.float32)
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        norms[norms == 0.0] = 1.0
-        matrix = matrix / norms
-        similarity_matrix = matrix @ matrix.T
-
-        merges: list[tuple[str, str, float]] = []
-        for i in range(len(survivors)):
-            for j in range(i + 1, len(survivors)):
-                if survivors[i]["type"] != survivors[j]["type"]:
-                    continue
-                a, b = survivors[i]["name"], survivors[j]["name"]
-                if uf.find(a) == uf.find(b):
-                    continue
-                if min(len(a), len(b)) < _MIN_NAME_LEN:
-                    continue
-                similarity = float(similarity_matrix[i, j])
-                if similarity <= _EMBEDDING_THRESHOLD:
-                    continue
-                duplicate, canonical = (a, b) if len(a) < len(b) else (b, a)
-                uf.union(duplicate, canonical)
-                merges.append((duplicate, canonical, similarity))
-        return merges
 
     # -------------------------------------------------------------- neo4j ops
     def _fetch_entities(self, corpus_id: str) -> list[dict[str, str]]:

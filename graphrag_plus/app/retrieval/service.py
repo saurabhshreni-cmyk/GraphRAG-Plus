@@ -20,6 +20,7 @@ construction, so a backend restart doesn't wipe retrieval state.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -60,6 +61,41 @@ _STRONG_COSINE = 0.30
 # bge-large-en-v1.5: on-topic 0.68-0.85, off-topic 0.21-0.36.
 _MIN_COSINE_FAISS = 0.45
 _STRONG_COSINE_FAISS = 0.55
+# Cosine distributions are model-specific, so the floors above only mean what
+# they say for the model they were measured on. A different backend (e.g. a
+# hosted embedding API) should be measured with scripts/calibrate_backend.py
+# and its floors supplied through these variables.
+_MIN_COSINE_ENV = "GRAPHRAG_MIN_COSINE_SEMANTIC"
+_STRONG_COSINE_ENV = "GRAPHRAG_STRONG_COSINE_SEMANTIC"
+
+
+def _semantic_floors() -> tuple[float, float]:
+    """(min, strong) cosine floors for the dense-vector backend.
+
+    Read per call (cheap) so a configuration change applies without a restart
+    and tests can set them. Invalid or inverted values fall back to the
+    measured defaults rather than silently disabling the gate.
+    """
+
+    def _read(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning("retrieval.bad_floor_env name=%s value=%r", name, raw)
+            return default
+        return value if 0.0 < value < 1.0 else default
+
+    min_cos = _read(_MIN_COSINE_ENV, _MIN_COSINE_FAISS)
+    strong_cos = _read(_STRONG_COSINE_ENV, _STRONG_COSINE_FAISS)
+    if strong_cos < min_cos:
+        logger.warning("retrieval.inverted_floors min=%.3f strong=%.3f - using defaults", min_cos, strong_cos)
+        return _MIN_COSINE_FAISS, _STRONG_COSINE_FAISS
+    return min_cos, strong_cos
+
+
 # Loose fallback relaxes floors less aggressively in FAISS mode — halving
 # them (as TF-IDF mode does) would drop below the off-topic baseline and
 # leak irrelevant chunks into NO_EVIDENCE queries.
@@ -339,8 +375,9 @@ class RetrievalService:
             )
 
         # Backend-specific floors; loose mode relaxes them (see constants).
-        base_min_cosine = _MIN_COSINE_FAISS if semantic_is_faiss else _MIN_COSINE
-        strong_cosine = _STRONG_COSINE_FAISS if semantic_is_faiss else _STRONG_COSINE
+        dense_min, dense_strong = _semantic_floors()
+        base_min_cosine = dense_min if semantic_is_faiss else _MIN_COSINE
+        strong_cosine = dense_strong if semantic_is_faiss else _STRONG_COSINE
         loose_factor = _LOOSE_FACTOR_FAISS if semantic_is_faiss else _LOOSE_FACTOR_TFIDF
         min_blend = _MIN_BLEND * (loose_factor if loose else 1.0)
         min_cosine = base_min_cosine * (loose_factor if loose else 1.0)

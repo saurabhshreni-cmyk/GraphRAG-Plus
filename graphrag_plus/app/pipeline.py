@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -16,11 +17,13 @@ from graphrag_plus.app.corpus.blob_store import make_blob_store
 from graphrag_plus.app.corpus.manager import CorpusManager, derive_corpus_name
 from graphrag_plus.app.corpus.models import CorpusBundle
 from graphrag_plus.app.domain.detector import detect_domain
+from graphrag_plus.app.embeddings.embedder import get_embedder
 from graphrag_plus.app.extraction.extractor import extract_from_chunks
 from graphrag_plus.app.failure.handler import FailureModeHandler
 from graphrag_plus.app.generation.generator import AnswerGenerator
 from graphrag_plus.app.generation.llm_clients import build_default_llm_client
 from graphrag_plus.app.gnn.scorer import GNNScorer
+from graphrag_plus.app.graph.local_resolver import resolve_local_graph
 from graphrag_plus.app.graph.versioning.manager import GraphVersionManager
 from graphrag_plus.app.ingestion.chunker import chunk_documents
 from graphrag_plus.app.ingestion.loader import load_documents
@@ -45,6 +48,11 @@ from graphrag_plus.app.utils.logging_utils import get_logger, log_event
 from graphrag_plus.app.utils.metrics import METRICS
 from graphrag_plus.app.utils.run_logger import utc_now_iso, write_query_output, write_run_log
 from graphrag_plus.app.utils.runtime import apply_global_seed
+
+
+def _entity_resolution_enabled() -> bool:
+    """GRAPHRAG_ENTITY_RESOLUTION toggles both resolvers (default on)."""
+    return os.environ.get("GRAPHRAG_ENTITY_RESOLUTION", "1").strip().lower() not in {"0", "false", "no"}
 
 
 class GraphRAGPipeline:
@@ -260,6 +268,24 @@ class GraphRAGPipeline:
         )
         timings["graph_upsert_ms"] = self._ms_since(graph_start)
 
+        # Entity resolution on the local graph. The Neo4j sync below resolves
+        # its own copy, but the local graph is what serves the graph endpoints
+        # and the graph retrieval signal whenever Neo4j is absent (always, on
+        # the free deployment), so it must be deduplicated too.
+        if _entity_resolution_enabled():
+            resolve_start = time.perf_counter()
+            local_stats = self._safe(
+                "graph.local_entity_resolution",
+                lambda: resolve_local_graph(self.graph_store, get_embedder()),
+                {"merged_count": 0},
+            )
+            timings["local_resolution_ms"] = self._ms_since(resolve_start)
+            log_event(
+                self.logger,
+                "graph.local_entity_resolution",
+                {"merged_count": local_stats.get("merged_count", 0)},
+            )
+
         # Mirror the extraction into Neo4j (production graph backend). Failures
         # never block ingestion — retrieval degrades to BM25 + FAISS.
         neo4j_start = time.perf_counter()
@@ -398,10 +424,7 @@ class GraphRAGPipeline:
 
         # Entity resolution: collapse duplicate entities ("Apple" / "Apple
         # Inc") into canonical nodes so graph traversal doesn't fragment.
-        import os
-
-        if os.environ.get("GRAPHRAG_ENTITY_RESOLUTION", "1").strip().lower() not in {"0", "false", "no"}:
-            from graphrag_plus.app.embeddings.embedder import get_embedder
+        if _entity_resolution_enabled():
             from graphrag_plus.app.graph.entity_resolver import EntityResolver
 
             resolver = EntityResolver(store, get_embedder())
