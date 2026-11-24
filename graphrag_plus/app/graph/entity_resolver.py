@@ -11,8 +11,10 @@ weakly-connected nodes. This module collapses them into one canonical node.
 
 Two strategies, run in order per corpus:
 
-1. **String similarity** (fast) — ``difflib.SequenceMatcher`` over pairs of
-   same-type entities; pairs above ``_STRING_THRESHOLD`` merge.
+1. **String similarity** (fast) — over pairs of same-type entities: exact
+   match after stripping legal suffixes ("Apple Inc" = "Apple"), unambiguous
+   token-prefix containment ("Tim" ⊂ "Tim Cook"), and ``difflib`` ratio above
+   ``_STRING_THRESHOLD`` for spelling variants.
 2. **Embedding similarity** (semantic) — remaining names are embedded with
    the shared embedder; same-type pairs with cosine above
    ``_EMBEDDING_THRESHOLD`` merge ("IBM" vs "International Business
@@ -27,6 +29,7 @@ deleted. A union-find keeps chains (A→B, B→C) consistent.
 from __future__ import annotations
 
 import os
+import re
 import time
 from difflib import SequenceMatcher
 from typing import Any
@@ -50,6 +53,25 @@ _UNCALIBRATED_EMBEDDING_THRESHOLD = 0.95
 _THRESHOLD_ENV = "GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD"
 # Names shorter than this are too ambiguous to auto-merge ("AI" vs "Al").
 _MIN_NAME_LEN = 3
+# Trailing tokens that mark a legal entity form, not a different entity.
+_LEGAL_SUFFIXES = frozenset(
+    {
+        "inc",
+        "incorporated",
+        "corp",
+        "corporation",
+        "co",
+        "company",
+        "llc",
+        "ltd",
+        "limited",
+        "plc",
+        "gmbh",
+        "ag",
+        "sa",
+    }
+)
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9&]+")
 
 
 def _is_token_prefix(a: str, b: str) -> bool:
@@ -99,14 +121,60 @@ def embedding_threshold_for(embedder: Any) -> float:
     return _EMBEDDING_THRESHOLD if "bge" in model_name else _UNCALIBRATED_EMBEDDING_THRESHOLD
 
 
+def _normalize_legal(name: str) -> str:
+    """Lowercased tokens with trailing legal-entity suffixes removed.
+
+    "Apple", "Apple Inc." and "Apple Incorporated" all normalize to "apple",
+    so they match exactly instead of relying on a transitive chain through
+    the bare name. At least one token is always kept ("Inc" alone stays).
+    """
+    tokens = _NAME_TOKEN_RE.findall(name.lower())
+    while len(tokens) > 1 and tokens[-1] in _LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens)
+
+
 def _string_pass(entities: list[dict[str, str]], uf: _UnionFind) -> list[tuple[str, str, float]]:
-    """SequenceMatcher over same-type pairs. Returns (dup, canon, sim)."""
+    """String-level alias detection over same-type pairs. Returns (dup, canon, sim).
+
+    Three signals, strongest first:
+
+    * identical ignoring case, or identical after stripping legal suffixes
+      ("Apple" / "Apple Inc" / "Apple Incorporated") -> 1.0;
+    * token-prefix containment ("Tim" / "Tim Cook") -> 0.90, but only when the
+      shorter name is UNAMBIGUOUS: it extends to exactly one distinct longer
+      name and has no legal-suffix twin. Otherwise a bare "Apple" that prefixes
+      both "Apple Inc" and "Apple Music" would bridge them through union-find
+      and fold the product into the company;
+    * ``SequenceMatcher`` ratio for spelling variants.
+    """
     merges: list[tuple[str, str, float]] = []
     by_type: dict[str, list[str]] = {}
     for row in entities:
         by_type.setdefault(row["type"], []).append(row["name"])
 
     for names in by_type.values():
+        normalized = {name: _normalize_legal(name) for name in names}
+        norm_counts: dict[str, int] = {}
+        for norm in normalized.values():
+            norm_counts[norm] = norm_counts.get(norm, 0) + 1
+        # Distinct longer names each name is a token-prefix of, excluding pure
+        # legal-suffix extensions (those are handled as exact matches).
+        extensions: dict[str, set[str]] = {name: set() for name in names}
+        for short in names:
+            for long_name in names:
+                if (
+                    short != long_name
+                    and len(short.split()) < len(long_name.split())
+                    and _is_token_prefix(short, long_name)
+                    and normalized[long_name] != normalized[short]
+                ):
+                    extensions[short].add(normalized[long_name])
+        # Unambiguous: exactly one distinct extension and no legal-suffix twin.
+        unambiguous = {
+            name for name in names if len(extensions[name]) == 1 and norm_counts[normalized[name]] == 1
+        }
+
         for i in range(len(names)):
             for j in range(i + 1, len(names)):
                 a, b = names[i], names[j]
@@ -115,13 +183,12 @@ def _string_pass(entities: list[dict[str, str]], uf: _UnionFind) -> list[tuple[s
                 if min(len(a), len(b)) < _MIN_NAME_LEN:
                     continue
                 similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
-                if a.lower() == b.lower():
+                if a.lower() == b.lower() or (normalized[a] and normalized[a] == normalized[b]):
                     similarity = 1.0
                 elif _is_token_prefix(a, b):
-                    # "Apple" ⊂ "Apple Incorporated": same-type token-prefix
-                    # containment is a corporate/person alias with near
-                    # certainty even when the char-level ratio is low.
-                    similarity = max(similarity, 0.90)
+                    shorter = a if len(a.split()) < len(b.split()) else b
+                    if shorter in unambiguous:
+                        similarity = max(similarity, 0.90)
                 if similarity <= _STRING_THRESHOLD:
                     continue
                 duplicate, canonical = (a, b) if len(a) < len(b) else (b, a)

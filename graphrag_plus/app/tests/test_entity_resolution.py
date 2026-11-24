@@ -66,6 +66,45 @@ class TestPlanEntityMerges:
         assert {m["canonical"] for m in plan} == {"Apple Incorporated"}
         assert {m["duplicate"] for m in plan} == {"Apple", "Apple Inc"}
 
+    def test_a_product_is_not_folded_into_the_company(self):
+        # Regression, observed live on the deployed preview: the bare "Apple"
+        # is a token-prefix of both "Apple Incorporated" and "Apple Music",
+        # and union-find used to chain all three into one node.
+        plan = plan_entity_merges(
+            _rows(
+                ("Apple", "ORG"),
+                ("Apple Inc", "ORG"),
+                ("Apple Incorporated", "ORG"),
+                ("Apple Music", "ORG"),
+            ),
+            None,
+        )
+        merged = {m["duplicate"] for m in plan}
+        assert merged == {"Apple", "Apple Inc"}
+        assert all(m["canonical"] == "Apple Incorporated" for m in plan)
+        assert "Apple Music" not in merged
+
+    def test_legal_suffix_variants_merge_without_a_bridging_name(self):
+        # Previously "Apple Inc" and "Apple Incorporated" only joined through a
+        # bare "Apple"; normalization links them directly.
+        plan = plan_entity_merges(_rows(("Apple Inc", "ORG"), ("Apple Incorporated", "ORG")), None)
+        assert plan == [{"duplicate": "Apple Inc", "canonical": "Apple Incorporated", "similarity": 1.0}]
+
+    def test_ambiguous_prefix_does_not_merge(self):
+        # "Google" prefixes two different products; it can't safely be either.
+        plan = plan_entity_merges(
+            _rows(("Google", "ORG"), ("Google Cloud", "ORG"), ("Google Maps", "ORG")), None
+        )
+        assert plan == []
+
+    def test_unambiguous_prefix_still_merges(self):
+        plan = plan_entity_merges(_rows(("Tim", "PERSON"), ("Tim Cook", "PERSON")), None)
+        assert [(m["duplicate"], m["canonical"]) for m in plan] == [("Tim", "Tim Cook")]
+
+    def test_spelling_variants_still_merge(self):
+        plan = plan_entity_merges(_rows(("Microsoft Corp.", "ORG"), ("Microsoft Corporation", "ORG")), None)
+        assert len(plan) == 1
+
     def test_never_merges_across_types(self):
         assert plan_entity_merges(_rows(("Apple", "ORG"), ("Apple", "PRODUCT")), None) == []
 
