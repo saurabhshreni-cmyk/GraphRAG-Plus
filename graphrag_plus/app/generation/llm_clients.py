@@ -230,7 +230,10 @@ class GroqClient:
         *,
         api_key: str | None = None,
         model: str = GROQ_MODEL_DEFAULT,
-        max_tokens: int = 400,
+        # gpt-oss spends hidden reasoning tokens out of this budget before it
+        # writes the answer. At 400 it often ran out mid-reasoning and
+        # returned empty content, which silently fell back to extractive.
+        max_tokens: int = 1024,
         timeout_s: float = 20.0,
     ):
         resolved = api_key or os.environ.get("GROQ_API_KEY")
@@ -246,6 +249,11 @@ class GroqClient:
             "model": self.model,
             "max_tokens": self.max_tokens,
             "temperature": 0.0,
+            # A grounded one-paragraph answer needs little thinking; low effort
+            # keeps gpt-oss's hidden reasoning short so the answer fits in
+            # max_tokens. The separate verifier does the deep reasoning pass.
+            "reasoning_effort": "low",
+            "include_reasoning": False,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
@@ -286,8 +294,15 @@ class GroqClient:
             raise
         choices = parsed.get("choices", [])
         if not choices:
+            logger.warning("groq.no_choices model=%s", self.model)
             return ""
-        content = str(choices[0].get("message", {}).get("content", ""))
+        content = str(choices[0].get("message", {}).get("content") or "")
+        if not content.strip():
+            logger.warning(
+                "groq.empty_content model=%s finish_reason=%s",
+                self.model,
+                choices[0].get("finish_reason"),
+            )
         return postprocess_llm_answer(content)
 
 

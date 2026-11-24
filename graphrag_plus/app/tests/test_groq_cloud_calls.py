@@ -152,3 +152,30 @@ class TestExtractorBackendSelection:
         result = extractor.extract("Nova Dynamics acquired Helix Sensors in 2021.", "c1", use_llm=True)
         relations = {(r.source, r.relation, r.target) for r in result.relationships}
         assert ("Nova Dynamics", "acquired", "Helix Sensors") in relations
+
+
+class TestGroqAnswerBudget:
+    """gpt-oss spends hidden reasoning tokens out of max_tokens. With 400 and
+    default effort the answer was often empty, silently forcing extractive."""
+
+    def test_requests_low_effort_and_a_roomy_budget(self, monkeypatch):
+        seen = _recorder(monkeypatch, llm_clients, _chat_reply("Priya Raman founded it."))
+        GroqClient(api_key="k").complete("Who founded it?", "[1] Priya Raman founded it.")
+        body = json.loads(seen[0].data.decode("utf-8"))
+        assert body["reasoning_effort"] == "low"
+        assert body["include_reasoning"] is False
+        assert body["max_tokens"] >= 1024
+
+    def test_empty_content_is_logged_not_silent(self, monkeypatch, caplog):
+        reply = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+        _recorder(monkeypatch, llm_clients, reply)
+        with caplog.at_level("WARNING"):
+            assert GroqClient(api_key="k").complete("q?", "[1] ctx") == ""
+        assert any(
+            "groq.empty_content" in r.getMessage() and "length" in r.getMessage() for r in caplog.records
+        )
+
+    def test_verifier_budget_leaves_room_for_high_effort(self, monkeypatch):
+        seen = _recorder(monkeypatch, reasoning_verifier, _chat_reply("VERDICT: SUPPORTED"))
+        GroqReasoningVerifier(api_key="k").verify("q?", "draft", [{"full_text": "evidence"}])
+        assert json.loads(seen[0].data.decode("utf-8"))["max_tokens"] >= 4096
