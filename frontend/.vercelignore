@@ -1,0 +1,7 @@
+# The dashboard project builds with Root Directory = frontend. Without this
+# file, Vercel falls back to the repo-root .vercelignore, which is written for
+# the Python API and strips /frontend entirely ("vite: command not found").
+node_modules
+dist
+.env
+.env.local
