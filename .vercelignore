@@ -16,6 +16,16 @@ graphrag_plus/examples
 graphrag_plus/graphrag_plus.egg-info
 LICENSE
 README.md
+# Container-host assets; the serverless bundle doesn't use them.
+# Leading slashes ANCHOR these to the repo root. .vercelignore follows
+# .gitignore rules, so a bare `api` would also match graphrag_plus/app/api/ and
+# strip the FastAPI app itself out of the bundle (ModuleNotFoundError at boot).
+/deploy
+/Dockerfile
+/.dockerignore
+# The container entrypoint. Vercel serves the app from the root index.py; if
+# /api shipped, Vercel would also build it as a separate legacy function.
+/api
 
 # Local runtime state — only the committed demo corpus ships.
 graphrag_plus/.cache

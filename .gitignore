@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Runtime logs (server / frontend stdout+stderr)
+*.log
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/
@@ -51,3 +54,8 @@ frontend/dist/
 frontend/.vite/
 
 .vercel
+
+# Derived per-corpus vector indexes (rebuilt from stored vectors on load)
+*.faiss.index
+faiss.index
+faiss.index.meta.json

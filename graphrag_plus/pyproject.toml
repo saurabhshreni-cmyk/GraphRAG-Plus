@@ -28,13 +28,24 @@ dependencies = [
   "pydantic-settings>=2.2.1",
   "networkx>=3.2.1",
   "numpy>=1.26.4",
-  "scikit-learn>=1.4.2",
+  # NOTE: scikit-learn is deliberately NOT a runtime dependency. It was used
+  # for one TF-IDF fallback signal and dragged in SciPy, ~160 MB between them,
+  # which is more than half the serverless bundle budget. That signal now lives
+  # in app/retrieval/tfidf.py on NumPy alone. sklearn stays in [dev] purely so
+  # test_tfidf.py can assert the two produce identical scores.
   "rank-bm25>=0.2.2",
   "python-dateutil>=2.9.0.post0",
   "pypdf>=4.2.0",
   "httpx>=0.27.0",
   "beautifulsoup4>=4.12.3",
   "prometheus-client>=0.20.0",
+  # Required by the FastAPI app itself: the /ingest/file endpoint uses
+  # UploadFile/Form, which FastAPI refuses to register without python-multipart.
+  # (Previously only present transitively in the dev venv — undeclared.)
+  "python-multipart>=0.0.9",
+  # The /ingest/file endpoint parses .docx uploads via python-docx (imported
+  # lazily). Declared so the advertised upload feature works out of the box.
+  "python-docx>=1.1.0",
 ]
 
 [project.optional-dependencies]
@@ -57,9 +68,16 @@ extras = [
 dev = [
   "pytest>=8.2.0",
   "pytest-cov>=5.0.0",
-  "ruff>=0.5.0",
-  "black>=24.4.0",
-  "mypy>=1.10.0",
+  # Reference implementation for the TF-IDF equivalence test only. Never a
+  # runtime dependency — see the note in [project].dependencies.
+  "scikit-learn>=1.4.2",
+  # Pin the lint/format/type tools EXACTLY. These gate CI, and their default
+  # rule sets / formatting change between releases — an unpinned `>=` silently
+  # turned CI red when a new ruff release enabled PLC0415/PLW0603. Bump these
+  # deliberately, never implicitly.
+  "ruff==0.15.12",
+  "black==26.3.1",
+  "mypy==1.20.2",
 ]
 
 [tool.setuptools]
@@ -116,8 +134,17 @@ ignore = [
   "PLR0913",
   "PLR0912",
   "PLR0915",
+  "PLR0911",  # too-many-return-statements — complexity heuristic, like the others above
   "PLR2004",
   "B008",
+  "UP042",   # str+Enum → StrEnum migration changes str() semantics; not worth the risk
+  # Lazy, in-function imports are a deliberate architectural pattern here: heavy
+  # / optional dependencies (sentence-transformers, faiss, spacy, neo4j, ollama,
+  # torch) are imported inside the functions that use them so the app imports and
+  # degrades gracefully when they're absent (e.g. the Vercel/serverless bundle).
+  # Hoisting them to module scope would break optional-dependency handling.
+  "PLC0415",  # `import` should be at top-level of file
+  "PLW0603",  # using the `global` statement (module-level singletons, by design)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -128,7 +155,10 @@ line-length = 110
 target-version = ["py311"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12: the dev venv and the container image both run 3.12, and current numpy
+# stubs use PEP 695 `type` statements that mypy only accepts when targeting
+# 3.12+. The runtime itself stays 3.11-compatible (see ruff target-version).
+python_version = "3.12"
 ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
@@ -143,7 +173,6 @@ exclude = ["graphrag_plus/app/tests", ".tmp", ".cache"]
 module = [
   "networkx.*",
   "rank_bm25.*",
-  "sklearn.*",
   "torch.*",
 ]
 ignore_missing_imports = true

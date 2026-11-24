@@ -73,9 +73,7 @@ class Settings(BaseSettings):
     llm_model_name: str = "qwen3.5:4b"
 
     # --- external integrations (unprefixed env vars from .env) --------------
-    neo4j_uri: str = Field(
-        default="", validation_alias=AliasChoices("NEO4J_URI", "GRAPHRAG_NEO4J_URI")
-    )
+    neo4j_uri: str = Field(default="", validation_alias=AliasChoices("NEO4J_URI", "GRAPHRAG_NEO4J_URI"))
     neo4j_username: str = Field(
         default="", validation_alias=AliasChoices("NEO4J_USERNAME", "GRAPHRAG_NEO4J_USERNAME")
     )

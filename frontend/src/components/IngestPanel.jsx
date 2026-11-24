@@ -22,6 +22,10 @@ const UPLOAD_STAGES = [
   "Done",
 ];
 const ACCEPTED_TYPES = ".pdf,.txt,.md,.docx,.html,.htm";
+// Mirrors the backend's _MAX_UPLOAD_BYTES. The serverless host rejects request
+// bodies over 4.5 MB before the backend runs, so catching it here is the only
+// way to give a clear message instead of an opaque network error.
+const MAX_UPLOAD_BYTES = 4_000_000;
 
 export default function IngestPanel({ onIngested, snapshot }) {
   const [filePathsRaw, setFilePathsRaw] = useState("");
@@ -42,6 +46,14 @@ export default function IngestPanel({ onIngested, snapshot }) {
     );
     if (!ok) {
       toast.error(`Unsupported type — allowed: ${ACCEPTED_TYPES}`);
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      const mb = (file.size / 1_000_000).toFixed(1);
+      toast.error(
+        `${file.name} is ${mb} MB — the limit is ${MAX_UPLOAD_BYTES / 1_000_000} MB. ` +
+          "Split it and upload the parts into the same corpus.",
+      );
       return;
     }
     setPendingFile(file);

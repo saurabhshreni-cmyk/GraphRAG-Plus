@@ -42,7 +42,7 @@
                                    └──────────────────────────────┘
 ```
 
-Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → BM25+FAISS; no embedding model → TF-IDF; verification timeout → unverified draft.
+Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → BM25+FAISS for retrieval **and the graph-exploration endpoints (`/graph/{cid}/full`, `/query-path`, `/entity`, `/stats`) fall back to the per-corpus NetworkX store persisted on every ingest**, so the knowledge-graph visualization works fully offline; no embedding model → TF-IDF; verification timeout → unverified draft. **Neo4j is therefore optional** — the system is fully functional (graph included) with only Ollama + a HuggingFace embedding model, both local.
 
 ## 2. Models Used and Why
 
@@ -53,9 +53,18 @@ Every stage degrades gracefully: no Ollama → extractive answers; no Neo4j → 
 | **qwen3.5:4b** (Ollama) | Stage-2 extraction + answer drafts | Markedly better structured-JSON compliance than qwen2.5:3b (Apple/Beats test: 5 typed relationships with descriptions vs 3 bare ones); `think=false` keeps latency bounded. |
 | **deepseek-r1:8b** (Ollama) | Final-answer reasoning verifier | Reasoning-class model re-reads evidence and confirms/corrects/abstains — demonstrated live refinement of a draft (E2E v2 query 1). Strictly additive: any failure returns the draft. |
 
+**In the free cloud deployment** each local model has a hosted counterpart, chosen automatically when the local one is absent:
+
+| Local | Cloud (free, no card) | Same role |
+|---|---|---|
+| bge-large-en-v1.5 | Gemini `gemini-embedding-001` at 1024 dims (Jina as fallback) | Embeddings; FAISS index unchanged |
+| qwen3.5:4b | Groq `openai/gpt-oss-20b` | Extraction + draft answers |
+| deepseek-r1:8b | Groq `openai/gpt-oss-120b`, `reasoning_effort=high` | Reasoning verifier; returns its reasoning trace |
+| spaCy en_core_web_sm | *same — runs in the deployed bundle* | Stage-1 NER |
+
 ## 3. How to Run Locally (from scratch)
 
-Prerequisites: **Python 3.12**, **Node 18+**, **Ollama** (`ollama pull qwen3.5:4b && ollama pull deepseek-r1:8b`), a **Neo4j AuraDB** instance (free tier works).
+Prerequisites: **Python 3.12/3.13**, **Node 18+**, **Ollama** (`ollama pull qwen3.5:4b && ollama pull deepseek-r1:8b`). **Neo4j AuraDB is optional** — if `NEO4J_*` is unset or unreachable, the graph endpoints serve from the local per-corpus NetworkX store instead (data is identical; it's written on every ingest). Set the `NEO4J_*` vars only if you want the graph mirrored into a real Neo4j instance.
 
 ```powershell
 git clone https://github.com/saurabhshreni-cmyk/GraphRAG-Plus.git
@@ -87,14 +96,17 @@ cd frontend && npm install && npm run dev     # http://localhost:5173
 
 ## 4. How to Deploy
 
-**Frontend → Vercel**: deploy `frontend/`; set `VITE_API_BASE` to the backend URL. (`vercel.json` / `api/index.py` remain the existing lightweight serverless deployment — untouched.)
+**Full step-by-step guide → [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md).** Everything runs on free tiers with no credit card:
 
-**Backend → Render.com** (Python web service):
-- Build: install the dependency list above; Start: `python -m uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`.
-- Set `NEO4J_*` env vars in the Render dashboard (never commit them).
-- **Ollama does not run on Render's free tier** → set `GRAPHRAG_LLM_ENABLED=false` (extractive answers, still evidence-grounded) or point `OLLAMA_BASE_URL` at hosted inference / set `ANTHROPIC_API_KEY` (client built in).
-- bge-large needs ~2 GB RAM — use a paid instance, or set `EMBEDDING_MODEL=all-MiniLM-L6-v2` for small instances (FAISS dimension adapts automatically).
-- Add the Vercel domain to `GRAPHRAG_CORS_ORIGINS`.
+- **Frontend → Vercel** (`graphrag-plus-dashboard`, static Vite) — already live and already pointed at the backend.
+- **Backend → Vercel Python** (`graphrag-plus-api`), served from the repo-root `index.py`. Python functions get 500 MB / 300 s / 2 GB on Hobby, which fits everything except PyTorch — so embeddings come from a hosted API while FAISS, BM25, TF-IDF, spaCy, the knowledge graph, entity resolution and PPR all run in-process exactly as locally.
+- **LLM → Groq** (`GROQ_API_KEY`): drafts on `gpt-oss-20b`, verification on `gpt-oss-120b` with its reasoning trace.
+- **Embeddings → Gemini** (`GEMINI_API_KEY`), Jina as fallback.
+- **Corpora → Neon Postgres** (`GRAPHRAG_DATABASE_URL`), optional. Chosen over Supabase, which pauses free projects after 7 idle days.
+- **Neo4j** stays optional: the local graph serves the graph endpoints and now runs the same entity resolution.
+- Run `graphrag_plus/scripts/calibrate_backend.py` once with your key to measure the relevance floors for the cloud embedding model.
+
+The `Dockerfile` still runs the full local-model stack on any container host with ≥ 2 GB RAM, but none is currently free without a card (Hugging Face Docker Spaces now require PRO).
 
 ## 5. Demo Script (5–7 minutes)
 
@@ -128,6 +140,8 @@ cd frontend && npm install && npm run dev     # http://localhost:5173
 - **LLM extraction is budgeted** (8 chunks/ingest by default) — relations are sparse on long documents; raise `GRAPHRAG_LLM_EXTRACTION_MAX_CHUNKS` at ~60-90 s/chunk.
 - **Entity resolution canonical-name choice** is "longest wins", which occasionally picks awkward canonicals ("Microsoft Research's" over "Microsoft").
 - Verification runs only on LLM drafts, not extractive answers (by design — extractive output is already evidence-bound).
+- **Neo4j-optional mode**: when Neo4j is unavailable the graph endpoints serve from the local NetworkX store. Entity resolution runs there too (same planner as the Neo4j resolver), so duplicate surface forms still collapse. The embedding-merge pass is a narrow safety net: on bge-large, alias and distinct entity names overlap in cosine (0.68–0.87 vs 0.58–0.80), so string and token-prefix matching do most of the merging.
+- **Cloud calibration**: the semantic relevance floors were measured on bge-large. For the hosted embedding model they are set from `calibrate_backend.py`; until then the bge values apply.
 - PPR loads the corpus entity graph into Python per query; fine to ~10k entities, needs Neo4j GDS beyond that.
 - Wikipedia loader extracts the article's lead sections (~8 k chars), not the full page.
 
@@ -139,7 +153,7 @@ cd frontend && npm install && npm run dev     # http://localhost:5173
 4. **Personalized PageRank retrieval** — research-grade graph signal (50 weighted chunks vs 1 from naive 2-hop on the same query in our measurements).
 5. **Reasoning-verified answers** — a second, reasoning-class model (DeepSeek R1) audits every LLM answer against the evidence before the user sees it, with full provenance surfaced in the UI.
 6. **Honest failure semantics** — NO_EVIDENCE abstention, LLM-failure fallbacks, calibrated confidence, trust scores, contradiction detection: the system says "I don't know" instead of hallucinating.
-7. **Local-first and free** — every model runs on a laptop via Ollama + HuggingFace; the only cloud dependency (Neo4j Aura) has a free tier.
+7. **Local-first, cloud-portable, free either way** — every model runs on a laptop via Ollama + HuggingFace, and each has a hosted free-tier counterpart selected automatically, so the same codebase runs publicly on Vercel with no card and no PyTorch.
 
 ---
 

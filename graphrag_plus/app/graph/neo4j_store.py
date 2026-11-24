@@ -23,6 +23,7 @@ pipeline keeps serving from BM25 + FAISS.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import threading
 from typing import Any
@@ -295,7 +296,7 @@ class Neo4jStore:
         so strongly-connected multi-hop neighbours outrank weakly-connected
         one-hop ones.
 
-        Adjacency = typed RELATES_TO edges ∪ co-mention edges (two entities
+        Adjacency = typed RELATES_TO edges plus co-mention edges (two entities
         sharing a chunk), treated as undirected. Chunks are scored by the
         summed PPR mass of the entities that mention them, normalized to
         [0, 1].
@@ -374,9 +375,7 @@ class Neo4jStore:
                     share = scores[node] / len(neighbours)
                     for neighbour in neighbours:
                         incoming[neighbour] += share
-                scores = [
-                    damping * incoming[i] + (1.0 - damping) * personalization[i] for i in range(n)
-                ]
+                scores = [damping * incoming[i] + (1.0 - damping) * personalization[i] for i in range(n)]
 
             top = sorted(range(n), key=lambda i: scores[i], reverse=True)[:20]
             top = [i for i in top if scores[i] > 0.0]
@@ -457,12 +456,20 @@ class Neo4jStore:
     def count_nodes(self, corpus_id: str | None = None) -> int:
         """Node count (per corpus, or database-wide when corpus_id is None)."""
         if corpus_id:
-            rows = self._run(
-                "MATCH (n {corpus_id: $corpus_id}) RETURN count(n) AS c", corpus_id=corpus_id
-            )
+            rows = self._run("MATCH (n {corpus_id: $corpus_id}) RETURN count(n) AS c", corpus_id=corpus_id)
         else:
             rows = self._run("MATCH (n) RETURN count(n) AS c")
         return int(rows[0]["c"]) if rows else 0
+
+    def available(self) -> bool:
+        """True iff a live driver is connected.
+
+        Cheap: after the first failed connect attempt ``_connect_failed`` is
+        set, so this returns immediately without paying the connection timeout
+        again. Used by the API to decide whether to serve graph endpoints from
+        Neo4j or fall back to the local NetworkX store.
+        """
+        return self._get_driver() is not None
 
     def health_check(self) -> bool:
         """True iff the database answers a trivial query."""
@@ -471,10 +478,8 @@ class Neo4jStore:
 
     def close(self) -> None:
         if self._driver is not None:
-            try:
+            with contextlib.suppress(Exception):  # pragma: no cover - defensive
                 self._driver.close()
-            except Exception:  # pragma: no cover - defensive
-                pass
             self._driver = None
         # Allow reconnect attempts after an explicit close.
         self._connect_failed = False

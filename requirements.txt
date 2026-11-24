@@ -1,18 +1,63 @@
-# Serverless deployment requirements (Vercel Python runtime).
-# Mirrors the core dependencies in graphrag_plus/pyproject.toml minus
-# uvicorn (the platform provides the ASGI server).
+# Dependencies for the deployed backend (Vercel Python runtime).
+#
+# Vercel's Python functions get a 500 MB uncompressed bundle, 300 s max
+# duration and 2 GB RAM on Hobby. That is enough for everything here EXCEPT
+# PyTorch + sentence-transformers, so embeddings come from a hosted API
+# instead (see graphrag_plus/app/embeddings/remote_embedder.py). Everything
+# else - BM25, TF-IDF, FAISS, spaCy NER, the knowledge graph - runs in-process
+# exactly as it does locally.
+#
+# Keep this in sync with the runtime deps in graphrag_plus/pyproject.toml.
+# Anything added here ships; anything missing here breaks the deploy at import
+# time, which is how /ingest/file silently 500'd every route before
+# python-multipart was declared.
+
+# --- web ---
 fastapi>=0.111.0
+# REQUIRED, not optional: main.py declares File()/Form() parameters, and
+# FastAPI calls ensure_multipart_is_installed() at route-registration time -
+# i.e. on import. Without this the app raises RuntimeError before the ASGI
+# object exists and EVERY endpoint returns FUNCTION_INVOCATION_FAILED.
+python-multipart>=0.0.9
+
+# --- core ---
 pydantic>=2.7.0
 pydantic-settings>=2.2.1
 networkx>=3.2.1
 numpy>=1.26.4
-scikit-learn>=1.4.2
 rank-bm25>=0.2.2
 python-dateutil>=2.9.0.post0
-pypdf>=4.2.0
 httpx>=0.27.0
-beautifulsoup4>=4.12.3
 prometheus-client>=0.20.0
-# Durable corpus storage (Supabase/Postgres). Optional at runtime — the
-# app falls back to file storage when GRAPHRAG_DATABASE_URL is unset.
+
+# --- document ingestion ---
+pypdf>=4.2.0
+python-docx>=1.1.0
+beautifulsoup4>=4.12.3
+
+# --- semantic retrieval ---
+# FAISS stays in the deployed bundle (~15 MB): the vectors now come from a
+# hosted embedding API instead of a local model, but the index itself is still
+# built and searched in-process, so "1024-dim FAISS index" remains literally
+# true of the deployed system.
+faiss-cpu>=1.8.0
+
+# --- stage-1 NER ---
+# spaCy and en_core_web_sm are ~150 MB together, which the 500 MB Python
+# bundle absorbs comfortably. Keeping them preserves the two-stage extraction
+# design: millisecond statistical NER on every chunk and every query, with the
+# LLM called only for typed relation extraction.
+# The model is not on PyPI, so it is pinned to its release wheel. Keep its
+# minor version aligned with spacy's (3.8.x <-> en_core_web_sm-3.8.x).
+spacy>=3.7.5,<3.9
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# --- durable corpus storage (Neon/Supabase Postgres) ---
+# Optional at runtime: the app falls back to file storage under /tmp when
+# GRAPHRAG_DATABASE_URL is unset.
 psycopg[binary]>=3.1.18
+
+# NOTE: scikit-learn and scipy are deliberately absent. They were pulled in for
+# a single TF-IDF fallback signal and cost ~160 MB between them; that signal is
+# now served by graphrag_plus/app/retrieval/tfidf.py, which reproduces the same
+# scores on NumPy alone (pinned by app/tests/test_tfidf.py).

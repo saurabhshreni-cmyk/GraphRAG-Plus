@@ -268,9 +268,7 @@ def _coerce_payload(payload: dict[str, Any], chunk_id: str) -> ExtractionResult:
         for endpoint in (rel.source, rel.target):
             if endpoint.lower() not in known:
                 known.add(endpoint.lower())
-                entities.append(
-                    Entity(name=endpoint, type=EntityType.OTHER, confidence=rel.confidence)
-                )
+                entities.append(Entity(name=endpoint, type=EntityType.OTHER, confidence=rel.confidence))
 
     return ExtractionResult(entities=entities, relationships=relationships, chunk_id=chunk_id)
 
