@@ -33,6 +33,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from graphrag_plus.app.utils.http_utils import json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -65,7 +66,7 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         url,
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
-        headers={"content-type": "application/json", **headers},
+        headers=json_headers(**headers),
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:

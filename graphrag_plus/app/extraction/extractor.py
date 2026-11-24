@@ -123,7 +123,11 @@ def _get_nlp() -> Any:
 
 
 def _get_ollama_client() -> Any:
-    """Build the Ollama client once. Returns None when the SDK is missing."""
+    """Build the extraction LLM client once. None when no backend is available.
+
+    Ollama first (the local, full-quality path). When its SDK is missing —
+    the cloud deployment — fall back to Groq if ``GROQ_API_KEY`` is set.
+    """
     global _ollama_client
     if _ollama_client is not None:
         return _ollama_client
@@ -131,8 +135,14 @@ def _get_ollama_client() -> Any:
         import ollama
 
         _ollama_client = ollama.Client(host=_OLLAMA_BASE_URL, timeout=_OLLAMA_TIMEOUT_S)
+        return _ollama_client
     except Exception as exc:
-        logger.warning("extractor.ollama_client_failed error=%s", exc)
+        logger.info("extractor.ollama_unavailable error=%s", exc)
+    from graphrag_plus.app.extraction.groq_extraction import build_groq_extraction_client
+
+    _ollama_client = build_groq_extraction_client()
+    if _ollama_client is not None:
+        logger.info("extractor.llm_backend=groq model=%s", _ollama_client.model)
     return _ollama_client
 
 
