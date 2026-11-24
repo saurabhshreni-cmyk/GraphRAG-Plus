@@ -35,6 +35,7 @@ from graphrag_plus.app.generation.generator import (
     LLM_ABSTAIN_TOKEN_ALT,
     LLMClient,
 )
+from graphrag_plus.app.utils.http_utils import json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 load_dotenv()  # pick up OLLAMA_MODEL / OLLAMA_BASE_URL from the project .env
@@ -193,11 +194,7 @@ class AnthropicClient:
             ANTHROPIC_API_URL,
             data=data,
             method="POST",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            },
+            headers=json_headers(**{"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION}),
         )
         try:
             # request URL is hard-coded to api.anthropic.com (constant above).
@@ -266,10 +263,7 @@ class GroqClient:
             GROQ_API_URL,
             data=data,
             method="POST",
-            headers={
-                "authorization": f"Bearer {self.api_key}",
-                "content-type": "application/json",
-            },
+            headers=json_headers(authorization=f"Bearer {self.api_key}"),
         )
         try:
             # URL is hard-coded to api.groq.com (constant above).
@@ -348,7 +342,7 @@ class LocalLLMClient:
             self.url,
             data=data,
             method="POST",
-            headers={"content-type": "application/json"},
+            headers=json_headers(),
         )
         try:
             # URL is operator-controlled (env var) and defaults to localhost.

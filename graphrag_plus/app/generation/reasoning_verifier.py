@@ -39,6 +39,7 @@ from typing import Any
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+from graphrag_plus.app.utils.http_utils import json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 load_dotenv()
@@ -307,10 +308,7 @@ class GroqReasoningVerifier:
             _GROQ_VERIFIER_URL,
             data=json.dumps(payload).encode("utf-8"),
             method="POST",
-            headers={
-                "authorization": f"Bearer {self._api_key}",
-                "content-type": "application/json",
-            },
+            headers=json_headers(authorization=f"Bearer {self._api_key}"),
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
