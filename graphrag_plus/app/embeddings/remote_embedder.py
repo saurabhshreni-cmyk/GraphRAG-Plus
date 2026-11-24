@@ -33,7 +33,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from graphrag_plus.app.utils.http_utils import json_headers
+from graphrag_plus.app.utils.http_utils import env_secret, json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -106,7 +106,7 @@ class GeminiEmbedder:
         dimension: int = REMOTE_EMBEDDING_DIM,
         timeout_s: float = _TIMEOUT_S,
     ) -> None:
-        resolved = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        resolved = (api_key or "").strip() or env_secret("GEMINI_API_KEY", "GOOGLE_API_KEY")
         if not resolved:
             raise ValueError("GeminiEmbedder requires an api_key or GEMINI_API_KEY/GOOGLE_API_KEY.")
         self._api_key: str = resolved
@@ -170,7 +170,7 @@ class JinaEmbedder:
         dimension: int = REMOTE_EMBEDDING_DIM,
         timeout_s: float = _TIMEOUT_S,
     ) -> None:
-        resolved = api_key or os.environ.get("JINA_API_KEY")
+        resolved = (api_key or "").strip() or env_secret("JINA_API_KEY")
         if not resolved:
             raise ValueError("JinaEmbedder requires an api_key argument or JINA_API_KEY env var.")
         self._api_key: str = resolved
@@ -300,14 +300,14 @@ def build_remote_embedder() -> RemoteEmbedder | None:
     no remote provider is configured, which is not an error - the caller then
     tries the local model and finally BM25 + TF-IDF.
     """
-    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+    if env_secret("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         try:
             provider: Any = GeminiEmbedder()
             logger.info("remote_embedder.selected provider=gemini model=%s", provider.model)
             return RemoteEmbedder(provider)
         except ValueError as exc:  # pragma: no cover - guarded by the check above
             logger.warning("remote_embedder.gemini_init_failed error=%s", exc)
-    if os.environ.get("JINA_API_KEY"):
+    if env_secret("JINA_API_KEY"):
         try:
             provider = JinaEmbedder()
             logger.info("remote_embedder.selected provider=jina model=%s", provider.model)

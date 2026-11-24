@@ -14,7 +14,7 @@ import os
 import urllib.request
 from typing import Any
 
-from graphrag_plus.app.utils.http_utils import json_headers
+from graphrag_plus.app.utils.http_utils import env_secret, json_headers
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_EXTRACTION_MODEL = "openai/gpt-oss-20b"
@@ -74,5 +74,5 @@ class GroqExtractionClient:
 
 def build_groq_extraction_client() -> GroqExtractionClient | None:
     """A client when ``GROQ_API_KEY`` is set, else None."""
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    api_key = env_secret("GROQ_API_KEY")
     return GroqExtractionClient(api_key) if api_key else None

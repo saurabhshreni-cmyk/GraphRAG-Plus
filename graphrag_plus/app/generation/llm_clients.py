@@ -35,7 +35,7 @@ from graphrag_plus.app.generation.generator import (
     LLM_ABSTAIN_TOKEN_ALT,
     LLMClient,
 )
-from graphrag_plus.app.utils.http_utils import json_headers
+from graphrag_plus.app.utils.http_utils import env_secret, json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 load_dotenv()  # pick up OLLAMA_MODEL / OLLAMA_BASE_URL from the project .env
@@ -165,7 +165,7 @@ class AnthropicClient:
         max_tokens: int = 400,
         timeout_s: float = 20.0,
     ):
-        resolved = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        resolved = (api_key or "").strip() or env_secret("ANTHROPIC_API_KEY")
         if not resolved:
             raise ValueError("AnthropicClient requires an api_key argument or " "ANTHROPIC_API_KEY env var.")
         self.api_key: str = resolved
@@ -236,7 +236,7 @@ class GroqClient:
         max_tokens: int = 1024,
         timeout_s: float = 20.0,
     ):
-        resolved = api_key or os.environ.get("GROQ_API_KEY")
+        resolved = (api_key or "").strip() or env_secret("GROQ_API_KEY")
         if not resolved:
             raise ValueError("GroqClient requires an api_key argument or GROQ_API_KEY env var.")
         self.api_key: str = resolved
@@ -423,12 +423,12 @@ def build_default_llm_client(*, llm_enabled: bool) -> LLMClient | None:
             return LocalLLMClient()
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("llm.local_init_failed error=%s", exc)
-    if os.environ.get("GROQ_API_KEY"):
+    if env_secret("GROQ_API_KEY"):
         try:
             return GroqClient()
         except ValueError as exc:
             logger.warning("llm.groq_init_failed error=%s", exc)
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if env_secret("ANTHROPIC_API_KEY"):
         try:
             return AnthropicClient()
         except ValueError as exc:
