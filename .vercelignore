@@ -16,6 +16,10 @@ graphrag_plus/examples
 graphrag_plus/graphrag_plus.egg-info
 LICENSE
 README.md
+# Container-host assets; the serverless bundle doesn't use them.
+deploy
+Dockerfile
+.dockerignore
 
 # Local runtime state — only the committed demo corpus ships.
 graphrag_plus/.cache
