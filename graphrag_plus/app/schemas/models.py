@@ -59,6 +59,8 @@ class CorpusInfo(BaseModel):
     document_count: int = 0
     chunk_count: int = 0
     entity_count: int = 0
+    # False for the bundled demo corpus, which the API refuses to delete.
+    deletable: bool = True
 
 
 class QueryRequest(BaseModel):

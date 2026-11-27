@@ -131,37 +131,37 @@ export default function CorpusSelector({
                             <span>{c.entity_count}e</span>
                           </div>
                         </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (
-                              window.confirm(
-                                `Delete corpus "${c.name}"? This is irreversible.`,
-                              )
-                            ) {
-                              onDelete?.(c.corpus_id);
-                            }
-                          }}
-                          className="rounded p-1 text-ink-500 opacity-60 hover:bg-rose-500/15 hover:text-rose-300 hover:opacity-100"
-                          title="Delete corpus"
-                          aria-label={`Delete ${c.name}`}
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 12 12"
-                            fill="none"
-                            aria-hidden
+                        {c.deletable === false ? (
+                          <span
+                            className="self-center rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-ink-500 [html:not(.dark)_&]:border-ink-200"
+                            title="The built-in demo corpus can't be deleted"
                           >
-                            <path
-                              d="M3 3L9 9M9 3L3 9"
-                              stroke="currentColor"
-                              strokeWidth="1.4"
-                              strokeLinecap="round"
-                            />
-                          </svg>
-                        </button>
+                            Demo
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (
+                                window.confirm(
+                                  `Delete "${c.name}" for everyone?\n\nIts documents, graph and chunks are removed permanently. This can't be undone.`,
+                                )
+                              ) {
+                                onDelete?.(c.corpus_id);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 self-center rounded-md border border-transparent px-1.5 py-1 text-[10px] text-ink-400 transition-colors
+                                     hover:border-rose-500/40 hover:bg-rose-500/15 hover:text-rose-300
+                                     focus-visible:border-rose-500/60 focus-visible:text-rose-300 focus-visible:outline-none
+                                     [html:not(.dark)_&]:text-ink-500 [html:not(.dark)_&]:hover:text-rose-600"
+                            title="Delete this corpus"
+                            aria-label={`Delete ${c.name}`}
+                          >
+                            <TrashIcon />
+                            <span>Delete</span>
+                          </button>
+                        )}
                       </div>
                     </li>
                   );
@@ -172,6 +172,20 @@ export default function CorpusSelector({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M2.5 4h11M6 4V2.75A.75.75 0 0 1 6.75 2h2.5a.75.75 0 0 1 .75.75V4M4 4l.6 8.6A1.5 1.5 0 0 0 6.1 14h3.8a1.5 1.5 0 0 0 1.5-1.4L12 4M6.75 7v4M9.25 7v4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

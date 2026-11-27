@@ -80,3 +80,21 @@ def test_unknown_corpus_id_still_validated_in_blob_mode(tmp_path: Path) -> None:
         mgr.get("../escape")
     with pytest.raises(KeyError):
         mgr.delete("../escape")
+
+
+def test_a_corpus_deleted_on_another_instance_is_not_served(tmp_path: Path) -> None:
+    # Two serverless instances share one Postgres store. Instance B cached
+    # the corpus before instance A deleted it; B must stop serving it.
+    store = InMemoryBlobStore()
+    instance_a = CorpusManager(tmp_path / "a", blob_store=store)
+    instance_b = CorpusManager(tmp_path / "b", blob_store=store)
+    keep = instance_a.create(name="Keep", domain="general").meta.corpus_id
+    doomed = instance_a.create(name="Doomed", domain="general").meta.corpus_id
+    instance_b.set_active(doomed)  # B now has it cached and active
+
+    instance_a.delete(doomed)
+
+    with pytest.raises(KeyError):
+        instance_b.get(doomed)
+    active = instance_b.get_active()
+    assert active is not None and active.meta.corpus_id == keep

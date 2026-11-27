@@ -40,12 +40,18 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+DELETE_GROUP = "/corpora:delete"
+
+
 # Route prefix -> limit. Ingest is far more expensive than a query (it runs LLM
 # extraction over many chunks and embeds every one), so it gets a tighter cap.
 def default_limits() -> dict[str, Limit]:
     return {
         "/query": Limit(_env_int("GRAPHRAG_RATE_QUERY_PER_MIN", 20), 60.0),
         "/ingest": Limit(_env_int("GRAPHRAG_RATE_INGEST_PER_10MIN", 6), 600.0),
+        # Not a URL prefix: DELETE /corpora/{id} is checked against this group
+        # explicitly, since GET /corpora must stay unlimited.
+        DELETE_GROUP: Limit(_env_int("GRAPHRAG_RATE_DELETE_PER_10MIN", 10), 600.0),
     }
 
 
