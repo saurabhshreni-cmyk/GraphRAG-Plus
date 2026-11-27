@@ -232,7 +232,7 @@ class PostgresBlobStore:
                 UPDATE {self._TABLE} SET vectors = %s
                 WHERE corpus_id = %s
                   AND COALESCE(
-                        (SELECT array_agg(c->>'chunk_id' ORDER BY c->>'chunk_id')
+                        (SELECT array_agg(c->>'chunk_id' ORDER BY (c->>'chunk_id') COLLATE "C")
                            FROM jsonb_array_elements(chunks) AS c),
                         ARRAY[]::text[]
                       ) = %s::text[]
