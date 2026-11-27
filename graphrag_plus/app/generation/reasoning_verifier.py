@@ -39,7 +39,7 @@ from typing import Any
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-from graphrag_plus.app.utils.http_utils import json_headers
+from graphrag_plus.app.utils.http_utils import env_secret, json_headers
 from graphrag_plus.app.utils.logging_utils import get_logger
 
 load_dotenv()
@@ -253,7 +253,7 @@ class GroqReasoningVerifier:
         timeout_s: float = _GROQ_TIMEOUT_S,
         reasoning_effort: str = _GROQ_REASONING_EFFORT,
     ) -> None:
-        self._api_key = api_key or os.environ.get("GROQ_API_KEY", "")
+        self._api_key = (api_key or "").strip() or env_secret("GROQ_API_KEY")
         self.model = model
         self.timeout_s = timeout_s
         self.reasoning_effort = reasoning_effort

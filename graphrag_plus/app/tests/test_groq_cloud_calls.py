@@ -179,3 +179,55 @@ class TestGroqAnswerBudget:
         seen = _recorder(monkeypatch, reasoning_verifier, _chat_reply("VERDICT: SUPPORTED"))
         GroqReasoningVerifier(api_key="k").verify("q?", "draft", [{"full_text": "evidence"}])
         assert json.loads(seen[0].data.decode("utf-8"))["max_tokens"] >= 4096
+
+
+# A fake key: same shape as a real Groq key, but not a credential.
+_FAKE_KEY = "gsk_" + "A1b2C3d4" * 6
+
+
+class TestKeyHygiene:
+    """A key pasted into Vercel with a trailing newline made urllib raise
+    "Invalid header value b'Bearer <key>\n'"; the fallback log then printed
+    that message, key included."""
+
+    def test_env_secret_trims_whitespace_and_skips_blanks(self, monkeypatch):
+        from graphrag_plus.app.utils.http_utils import env_secret
+
+        monkeypatch.setenv("FIRST", "   ")
+        monkeypatch.setenv("SECOND", f"{_FAKE_KEY}\n")
+        assert env_secret("FIRST", "SECOND") == _FAKE_KEY
+        assert env_secret("UNSET_FOR_THIS_TEST") == ""
+
+    def test_groq_clients_send_a_clean_header_for_a_newline_key(self, monkeypatch):
+        monkeypatch.setenv("GROQ_API_KEY", f"{_FAKE_KEY}\n")
+        seen = _recorder(monkeypatch, llm_clients, _chat_reply("Priya Raman founded it."))
+        GroqClient().complete("Who founded it?", "[1] Priya Raman founded it.")
+        assert seen[0].get_header("Authorization") == f"Bearer {_FAKE_KEY}"
+
+        seen_v = _recorder(monkeypatch, reasoning_verifier, _chat_reply("VERDICT: SUPPORTED"))
+        GroqReasoningVerifier().verify("q?", "draft", [{"full_text": "evidence"}])
+        assert seen_v[0].get_header("Authorization") == f"Bearer {_FAKE_KEY}"
+
+    def test_redact_secrets_covers_every_key_shape(self):
+        from graphrag_plus.app.utils.logging_utils import REDACTED, redact_secrets
+
+        samples = [
+            f"Invalid header value b'Bearer {_FAKE_KEY}\n'",
+            "gemini key AIza" + "x" * 35,
+            "jina key jina_" + "y" * 20,
+            "anthropic key sk-ant-" + "z" * 20,
+        ]
+        for sample in samples:
+            cleaned = redact_secrets(sample)
+            assert REDACTED in cleaned
+            assert _FAKE_KEY not in cleaned and "x" * 35 not in cleaned
+
+    def test_project_loggers_never_emit_a_key(self, caplog):
+        from graphrag_plus.app.utils.logging_utils import get_logger
+
+        log = get_logger("graphrag_plus.test_redaction")
+        with caplog.at_level("WARNING"):
+            log.warning("generator.llm_fallback reason=error error=%s", f"b'Bearer {_FAKE_KEY}\n'")
+        text = "\n".join(r.getMessage() for r in caplog.records)
+        assert _FAKE_KEY not in text
+        assert "[REDACTED]" in text
