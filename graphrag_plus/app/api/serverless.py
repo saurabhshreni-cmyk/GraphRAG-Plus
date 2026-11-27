@@ -43,6 +43,11 @@ _PATH_DEFAULTS: dict[str, Path] = {
 for _name, _path in _PATH_DEFAULTS.items():
     os.environ.setdefault(_name, str(_path))
 
+# A hosted API must never read files by a caller-supplied server path: on a
+# public deployment that is arbitrary file read. Uploads (POST /ingest/file)
+# and URLs still work. setdefault, so an operator can opt back in explicitly.
+os.environ.setdefault("GRAPHRAG_ALLOW_FILE_PATHS", "0")
+
 from graphrag_plus.app.api.main import app  # noqa: E402 - must follow the env setup above
 
 __all__ = ["app"]

@@ -11,7 +11,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React_18-20232A?logo=react&logoColor=61DAFB)
 ![Vercel](https://img.shields.io/badge/Deployed_on-Vercel-000000?logo=vercel&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-254_passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-261_passing-2ea44f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 </div>
@@ -28,7 +28,7 @@
 | **AI models** | Groq `gpt-oss-20b` (extraction + answers) and `gpt-oss-120b` (verification) · Gemini embeddings; fully local alternatives via Ollama |
 | **Runs on** | Vercel serverless + Neon Postgres, **$0/month, no credit card** |
 | **Speed** | ~3.7 s median per question, end to end, including the verification pass |
-| **Quality** | 254 automated tests · ruff · black · mypy · CI on every PR |
+| **Quality** | 261 automated tests · ruff · black · mypy · CI on every PR |
 
 ## Try it in 60 seconds
 
@@ -113,7 +113,7 @@ The parts I'd talk through in an interview: real problems found and fixed while 
   - Each fix came with a regression test.
 - **Secure by default for a public demo.**
   - Per-client rate limits and a 4 MB upload cap.
-  - SSRF-guarded URL ingestion.
+  - SSRF-guarded URL ingestion, and no server-side file paths on hosted deployments.
   - The demo corpus is protected from deletion.
   - A logging filter that redacts API keys, bearer tokens and database URLs from every log line.
 - **Entity resolution without false merges.**
@@ -187,7 +187,7 @@ Deploying your own copy for free takes about 15 minutes: see **[deploy/DEPLOYMEN
 |--------|------|---------|
 | `GET`  | `/health` | Liveness + whether an LLM is enabled |
 | `POST` | `/ingest/file` | Upload one document (multipart, ≤ 4 MB) into a new or existing corpus |
-| `POST` | `/ingest` | Ingest URLs (or server-side file paths when self-hosted) |
+| `POST` | `/ingest` | Ingest URLs (or server-side file paths when self-hosted; refused with 403 on hosted deployments) |
 | `POST` | `/query` | Hybrid retrieval + generated, verified answer (optional `corpus_id`) |
 | `GET`  | `/corpora` | List corpora with counts and a `deletable` flag |
 | `GET`  | `/corpora/active` | The active corpus |
@@ -267,7 +267,7 @@ GraphRAG-Plus/
         ├── contradiction/      ← disagreement detection on single-valued facts
         ├── scoring/ trust/ calibration/ failure/ analyst/ planning/ ...
         ├── utils/              ← logging (with secret redaction), HTTP helpers, IO
-        └── tests/              ← 254 tests
+        └── tests/              ← 261 tests
 ```
 
 </details>
@@ -284,6 +284,7 @@ GraphRAG-Plus/
 | `GRAPHRAG_DATABASE_URL` | Postgres for durable, shared corpora |
 | `GRAPHRAG_MIN_COSINE_SEMANTIC`, `GRAPHRAG_STRONG_COSINE_SEMANTIC`, `GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD` | Calibrated per embedding model |
 | `GRAPHRAG_CORS_ORIGINS` | Allowed dashboard origins |
+| `GRAPHRAG_ALLOW_FILE_PATHS` | Let `/ingest` read server-side paths. On by default locally, off on hosted entrypoints |
 
 The full list is in the [deployment guide](deploy/DEPLOYMENT.md#environment-variable-reference).
 
