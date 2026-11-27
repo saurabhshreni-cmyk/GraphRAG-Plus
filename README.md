@@ -74,16 +74,15 @@ Most RAG demos embed chunks, retrieve the top-k and hand them to an LLM. GraphRA
 
 ```mermaid
 flowchart LR
-    DOC[Documents<br/>PDF · DOCX · URL] --> EXT[spaCy NER +<br/>LLM relations]
-    EXT --> KG[(Knowledge graph<br/>+ entity resolution)]
-    DOC --> VEC[(FAISS · BM25<br/>TF-IDF)]
+    DOC[Documents] -->|spaCy + LLM| KG[(Knowledge<br/>graph)]
+    DOC -->|embed| VEC[(FAISS<br/>BM25)]
     Q([Question]) --> RET{Hybrid<br/>retrieval}
     KG --> RET
     VEC --> RET
-    RET -->|relevant| DRAFT[Draft answer<br/>gpt-oss-20b]
-    RET -.->|below calibrated floor| ABS([Abstain:<br/>NO_EVIDENCE])
-    DRAFT --> VER[Verify against<br/>evidence<br/>gpt-oss-120b]
-    VER --> OUT([Answer · evidence<br/>confidence · trace])
+    RET --> DRAFT[Draft<br/>gpt-oss-20b]
+    RET -.->|no evidence| ABS([Abstain])
+    DRAFT --> VER[Verify<br/>gpt-oss-120b]
+    VER --> OUT([Answer +<br/>evidence])
 ```
 
 The same code runs in the cloud and fully offline; only the model providers change, chosen automatically from the environment:
