@@ -59,8 +59,8 @@ Most RAG demos embed chunks, retrieve the top-k and hand them to an LLM. GraphRA
 
 <table>
 <tr>
-<td width="62%"><img src="docs/images/dashboard-light.jpg" alt="Light theme: the reasoning verifier corrected the draft answer against the evidence"></td>
-<td width="38%"><img src="docs/images/mobile.jpg" alt="Mobile layout showing a verified answer with evidence"></td>
+<td width="70%" valign="top"><img src="docs/images/dashboard-light.jpg" alt="Light theme: the reasoning verifier corrected the draft answer against the evidence"></td>
+<td width="30%" valign="top"><img src="docs/images/mobile.jpg" alt="Mobile layout showing a verified answer with evidence"></td>
 </tr>
 <tr>
 <td><sub>The verifier in action: <i>"GPT-OSS 120B corrected the draft against the evidence"</i>.</sub></td>
@@ -337,6 +337,12 @@ ruff check . && black --check . && mypy app && pytest
 - **An answer-quality benchmark** (exact match / faithfulness on a labelled question set) tracked in CI
 - **Async ingest** with progress streaming for large documents
 - **Auth** for write endpoints, beyond the current rate limits
+
+## Further reading
+
+- [Free deployment guide](deploy/DEPLOYMENT.md): Vercel + Groq + Gemini + Neon, step by step
+- [End-to-end test report](docs/E2E_RESULTS_V2.md): the full local stack (bge-large, qwen3.5, DeepSeek R1, Neo4j with PageRank) run against real documents
+- [System notes](docs/PROGRESS.md): architecture, model choices and known limitations
 
 ## Author
 
