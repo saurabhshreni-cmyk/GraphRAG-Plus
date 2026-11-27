@@ -142,6 +142,7 @@ not applied — check the three variables and redeploy.
 | `GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD` | `0.92` bge / `0.95` other | Entity merge bar |
 | `GRAPHRAG_DATABASE_URL` | — | Postgres for durable corpora |
 | `GRAPHRAG_CORS_ORIGINS` | dev + dashboard | Comma-separated allowed origins |
+| `GRAPHRAG_ALLOW_FILE_PATHS` | `1` locally, `0` hosted | Whether `POST /ingest` may read server-side file paths. Hosted entrypoints default it to `0`; leave it off on any public deployment |
 | `GRAPHRAG_MAX_UPLOAD_BYTES` | `4000000` | Upload cap |
 | `GRAPHRAG_ENTITY_RESOLUTION` | `1` | `0` disables both resolvers |
 | `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | — | Optional real Neo4j |

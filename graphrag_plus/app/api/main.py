@@ -122,9 +122,33 @@ def health() -> HealthResponse:
     )
 
 
+_ALLOW_FILE_PATHS_ENV = "GRAPHRAG_ALLOW_FILE_PATHS"
+
+
+def _file_paths_allowed() -> bool:
+    """Whether ``POST /ingest`` may read files by a server-side path.
+
+    ``file_paths`` exists for self-hosting, where the API runs on the same
+    machine as the documents. On a public deployment it would let any caller
+    read files off the server's own disk (``/etc/passwd``, ``/proc/self/environ``)
+    into a corpus they can then read back. On by default for local use;
+    ``api/serverless.py`` turns it off for every hosted entrypoint. Read per
+    request so tests and a config change apply without a restart.
+    """
+    return os.environ.get(_ALLOW_FILE_PATHS_ENV, "1").strip().lower() not in {"0", "false", "no"}
+
+
 @app.post("/ingest", response_model=IngestResponse)
 def ingest(request: IngestRequest) -> IngestResponse:
     """Ingest files and URLs into a (new or existing) corpus."""
+    if request.file_paths and not _file_paths_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Server-side file paths are disabled on this deployment. "
+                "Upload the document instead (POST /ingest/file), or pass URLs."
+            ),
+        )
     return pipeline.ingest(
         request.file_paths,
         request.urls,
