@@ -16,6 +16,8 @@ _SECRET_PATTERNS = (
     re.compile(r"\bAIza[0-9A-Za-z_\-]{20,}"),  # Google / Gemini
     re.compile(r"\bjina_[A-Za-z0-9]{8,}"),  # Jina
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{8,}"),  # Anthropic
+    # Database URLs carry a password: postgresql://user:PASSWORD@host/db
+    re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[^\s'\"]+"),
 )
 REDACTED = "[REDACTED]"
 

@@ -182,6 +182,8 @@ def make_blob_store(database_url: str) -> BlobStore | None:
     is unreachable, logs and returns ``None`` so the app still boots in
     file mode rather than crashing on startup.
     """
+    # Dashboard-pasted values often end in a newline, which breaks the DSN.
+    database_url = (database_url or "").strip()
     if not database_url:
         return None
     try:

@@ -140,10 +140,13 @@ class QueryResponse(BaseModel):
     corpus_id: str | None = None
     corpus_name: str | None = None
     corpus_domain: str | None = None
-    # DeepSeek R1 reasoning-verification metadata (final answer quality gate).
+    # Reasoning-verification metadata (final answer quality gate). The model
+    # is DeepSeek R1 via Ollama locally and gpt-oss-120b via Groq in the cloud;
+    # ``reasoning_model`` says which one ran so the UI can label it honestly.
     verified_by_reasoning: bool = False
     reasoning_summary: str = ""
     answer_changed_by_reasoning: bool = False
+    reasoning_model: str = ""
 
 
 class GraphResponse(BaseModel):

@@ -101,6 +101,7 @@ class VerificationResult(BaseModel):
     changed: bool = Field(default=False, description="True if the draft answer was modified")
     reasoning_summary: str = Field(default="", description="Brief summary of what was checked")
     time_taken_s: float = 0.0
+    model: str = Field(default="", description="Model that ran the verification, e.g. openai/gpt-oss-120b")
 
 
 def _normalize_for_compare(text: str) -> str:
@@ -211,6 +212,7 @@ class ReasoningVerifier:
             changed=changed,
             reasoning_summary=summary,
             time_taken_s=elapsed,
+            model=self.model,
         )
 
     # -------------------------------------------------------------------- parse
@@ -356,6 +358,7 @@ class GroqReasoningVerifier:
             changed=changed,
             reasoning_summary=summary,
             time_taken_s=elapsed,
+            model=self.model,
         )
 
 
