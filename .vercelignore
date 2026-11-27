@@ -21,6 +21,7 @@ README.md
 # .gitignore rules, so a bare `api` would also match graphrag_plus/app/api/ and
 # strip the FastAPI app itself out of the bundle (ModuleNotFoundError at boot).
 /deploy
+/docs
 /Dockerfile
 /.dockerignore
 # The container entrypoint. Vercel serves the app from the root index.py; if
