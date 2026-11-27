@@ -73,23 +73,27 @@ Most RAG demos embed chunks, retrieve the top-k and hand them to an LLM. GraphRA
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Ingest
-        A[PDF · DOCX · TXT<br/>MD · HTML · URL] --> B[Chunker<br/>SSRF-guarded loader]
+flowchart TB
+    subgraph Ingest["1 · Ingest"]
+        direction LR
+        A[PDF · DOCX · TXT<br/>MD · HTML · URL] --> B[Chunker<br/>SSRF-guarded]
         B --> C[spaCy NER +<br/>LLM typed relations]
-        C --> D[(Knowledge graph<br/>+ entity resolution<br/>+ versioning)]
-        B --> E[(FAISS vectors<br/>BM25 · TF-IDF)]
+        C --> D[(Knowledge graph<br/>entity resolution<br/>versioning)]
+        B --> E[(FAISS · BM25<br/>TF-IDF)]
     end
-    subgraph Answer
+    subgraph Retrieve["2 · Retrieve"]
+        direction LR
         Q([Question]) --> R{Hybrid retrieval<br/>keyword + dense + graph}
-        D --> R
-        E --> R
-        R -->|below calibrated floor| X([Abstain: NO_EVIDENCE])
-        R --> S[Score · trust ·<br/>calibration · conflicts]
-        S --> G[Draft answer<br/>gpt-oss-20b]
-        G --> V[Reasoning verifier<br/>gpt-oss-120b]
-        V --> O([Answer + evidence +<br/>confidence + reasoning])
+        R -->|below calibrated floor| X([Abstain:<br/>NO_EVIDENCE])
+        R --> S[Score · trust<br/>calibration · conflicts]
     end
+    subgraph Answer["3 · Answer"]
+        direction LR
+        G[Draft answer<br/>gpt-oss-20b] --> V[Reasoning verifier<br/>gpt-oss-120b] --> O([Answer + evidence<br/>+ confidence + trace])
+    end
+    D --> R
+    E --> R
+    S --> G
 ```
 
 The same code runs in the cloud and fully offline; only the model providers change, chosen automatically from the environment:
