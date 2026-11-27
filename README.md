@@ -72,18 +72,7 @@ Most RAG demos embed chunks, retrieve the top-k and hand them to an LLM. GraphRA
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    DOC[Documents] -->|spaCy + LLM| KG[(Knowledge<br/>graph)]
-    DOC -->|embed| VEC[(FAISS<br/>BM25)]
-    Q([Question]) --> RET{Hybrid<br/>retrieval}
-    KG --> RET
-    VEC --> RET
-    RET --> DRAFT[Draft<br/>gpt-oss-20b]
-    RET -.->|no evidence| ABS([Abstain])
-    DRAFT --> VER[Verify<br/>gpt-oss-120b]
-    VER --> OUT([Answer +<br/>evidence])
-```
+![Architecture: documents become a knowledge graph and search indexes; a question runs hybrid retrieval over both, abstains if nothing is relevant, otherwise a draft answer from gpt-oss-20b is verified by gpt-oss-120b and returned with evidence and confidence](docs/images/architecture.svg)
 
 The same code runs in the cloud and fully offline; only the model providers change, chosen automatically from the environment:
 

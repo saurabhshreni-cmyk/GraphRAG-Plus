@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 425" width="1000" height="425" role="img" aria-labelledby="t d">
+  <title id="t">GraphRAG++ architecture</title>
+  <desc id="d">Documents are turned into a knowledge graph and search indexes. A question runs hybrid retrieval over both; if nothing relevant is found the system abstains, otherwise a draft answer is written by gpt-oss-20b, verified by gpt-oss-120b, and returned with its evidence and confidence.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7d8aa8"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f87171"/>
+    </marker>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1220"/>
+      <stop offset="1" stop-color="#111a2e"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .card { fill: #161d30; stroke: #2b3654; stroke-width: 1.5; }
+    .title { font: 600 15px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #e6ebf5; }
+    .sub { font: 400 12px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #9aa6b8; }
+    .lane { font: 700 11px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #5b8cff; letter-spacing: 1.6px; }
+    .edge { font: 500 11px 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; fill: #9aa6b8; }
+    .line { fill: none; stroke: #7d8aa8; stroke-width: 1.6; }
+  </style>
+
+  <rect x="0" y="0" width="1000" height="425" rx="18" fill="url(#bg)"/>
+
+  <text class="lane" x="22" y="32">INGEST</text>
+  <text class="lane" x="22" y="282">ASK</text>
+
+  <!-- Ingest lane -->
+  <rect class="card" x="22" y="45" width="150" height="70" rx="12"/>
+  <text class="title" x="97" y="75" text-anchor="middle">Documents</text>
+  <text class="sub" x="97" y="96" text-anchor="middle">PDF · DOCX · TXT · URL</text>
+
+  <rect class="card" x="230" y="18" width="200" height="86" rx="12"/>
+  <text class="title" x="330" y="45" text-anchor="middle">Knowledge graph</text>
+  <text class="sub" x="330" y="66" text-anchor="middle">LLM-extracted relations</text>
+  <text class="sub" x="330" y="84" text-anchor="middle">entity resolution · versioning</text>
+
+  <rect class="card" x="230" y="128" width="200" height="70" rx="12"/>
+  <text class="title" x="330" y="157" text-anchor="middle">Search indexes</text>
+  <text class="sub" x="330" y="178" text-anchor="middle">FAISS · BM25 · TF-IDF</text>
+
+  <path class="line" d="M172 80 H198 V61 H228" marker-end="url(#arrow)"/>
+  <path class="line" d="M172 80 H198 V163 H228" marker-end="url(#arrow)"/>
+
+  <!-- Ask lane -->
+  <rect class="card" x="22" y="292" width="150" height="56" rx="28"/>
+  <text class="title" x="97" y="325" text-anchor="middle">Question</text>
+
+  <rect x="478" y="222" width="180" height="96" rx="14" fill="#18223d" stroke="#5b8cff" stroke-width="2"/>
+  <text class="title" x="568" y="254" text-anchor="middle">Hybrid retrieval</text>
+  <text class="sub" x="568" y="275" text-anchor="middle">keyword + dense + graph</text>
+  <text class="sub" x="568" y="294" text-anchor="middle">calibrated relevance floors</text>
+
+  <path class="line" d="M430 61 H568 V220" marker-end="url(#arrow)"/>
+  <path class="line" d="M430 163 H568"/>
+  <path class="line" d="M172 320 H448 V270 H476" marker-end="url(#arrow)"/>
+
+  <rect class="card" x="700" y="230" width="130" height="80" rx="12"/>
+  <text class="title" x="765" y="262" text-anchor="middle">Draft answer</text>
+  <text class="sub" x="765" y="283" text-anchor="middle">gpt-oss-20b</text>
+
+  <rect x="852" y="230" width="128" height="80" rx="12" fill="#2a2414" stroke="#fbbf24" stroke-width="1.8"/>
+  <text class="title" x="916" y="262" text-anchor="middle" style="fill:#fde68a">Verify</text>
+  <text class="sub" x="916" y="283" text-anchor="middle" style="fill:#e7c873">gpt-oss-120b</text>
+
+  <rect x="852" y="338" width="128" height="68" rx="12" fill="#11291f" stroke="#34d399" stroke-width="1.8"/>
+  <text class="title" x="916" y="366" text-anchor="middle" style="fill:#a7f3d0">Answer</text>
+  <text class="sub" x="916" y="386" text-anchor="middle" style="fill:#86d9b5">evidence · confidence</text>
+
+  <rect x="700" y="345" width="130" height="56" rx="12" fill="#2a1518" stroke="#f87171" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text class="title" x="765" y="369" text-anchor="middle" style="fill:#fecaca">Abstain</text>
+  <text class="sub" x="765" y="388" text-anchor="middle" style="fill:#f2a3a3">NO_EVIDENCE</text>
+
+  <path class="line" d="M658 270 H698" marker-end="url(#arrow)"/>
+  <path class="line" d="M830 270 H850" marker-end="url(#arrow)"/>
+  <path class="line" d="M916 310 V336" marker-end="url(#arrow)"/>
+  <path d="M568 318 V373 H698" fill="none" stroke="#f87171" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-red)"/>
+  <text class="edge" x="580" y="392" style="fill:#f2a3a3">nothing relevant</text>
+</svg>
