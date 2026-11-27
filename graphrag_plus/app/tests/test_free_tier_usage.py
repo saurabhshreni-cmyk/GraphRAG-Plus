@@ -54,6 +54,12 @@ def _chunks() -> list[Chunk]:
 
 
 class TestVectorsTravelWithTheCorpus:
+    # FAISS ships in the deployed bundle and the [dev] extra; skip cleanly in
+    # a slimmer local env rather than fail on a missing optional dependency.
+    @pytest.fixture(autouse=True)
+    def _needs_faiss(self):
+        pytest.importorskip("faiss")
+
     def test_a_second_instance_reuses_the_stored_index(self, tmp_path: Path, monkeypatch):
         embedder = _CountingEmbedder()
         monkeypatch.setattr(retrieval_service, "get_embedder", lambda: embedder)

@@ -71,6 +71,9 @@ dev = [
   # Reference implementation for the TF-IDF equivalence test only. Never a
   # runtime dependency — see the note in [project].dependencies.
   "scikit-learn>=1.4.2",
+  # The deployed bundle ships FAISS (root requirements.txt), so CI must test
+  # the dense-index paths too: index persistence across serverless instances.
+  "faiss-cpu>=1.8.0",
   # Pin the lint/format/type tools EXACTLY. These gate CI, and their default
   # rule sets / formatting change between releases — an unpinned `>=` silently
   # turned CI red when a new ruff release enabled PLC0415/PLW0603. Bump these
