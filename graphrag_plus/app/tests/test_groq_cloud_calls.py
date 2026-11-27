@@ -240,3 +240,27 @@ def test_verification_reports_which_model_ran(monkeypatch):
     result = GroqReasoningVerifier(api_key="k").verify("q?", "draft", [{"full_text": "evidence"}])
     assert result.verified is True
     assert result.model == "openai/gpt-oss-120b"
+
+
+def test_database_urls_are_redacted_from_logs():
+    from graphrag_plus.app.utils.logging_utils import REDACTED, redact_secrets
+
+    url = "postgresql://neondb_owner:s3cretPassw0rd@ep-x-pooler.aws.neon.tech/neondb?sslmode=require"
+    cleaned = redact_secrets(f"blob_store.postgres_unavailable error=cannot connect to {url}")
+    assert "s3cretPassw0rd" not in cleaned
+    assert REDACTED in cleaned
+
+
+def test_blob_store_url_is_trimmed(monkeypatch):
+    from graphrag_plus.app.corpus import blob_store
+
+    seen: list[str] = []
+
+    def fake_store(dsn: str) -> object:
+        seen.append(dsn)
+        return object()
+
+    monkeypatch.setattr(blob_store, "PostgresBlobStore", fake_store)
+    assert blob_store.make_blob_store("postgresql://u:p@h/db?sslmode=require\n") is not None
+    assert seen == ["postgresql://u:p@h/db?sslmode=require"]
+    assert blob_store.make_blob_store("  \n") is None
