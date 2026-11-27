@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import Header from "./components/Header.jsx";
 import IngestPanel from "./components/IngestPanel.jsx";
@@ -148,11 +148,19 @@ export default function App() {
     if (activeCorpusId) refreshGraph();
   }, [activeCorpusId, refreshGraph]);
 
+  const activeCorpus = useMemo(
+    () => corpora.find((c) => c.corpus_id === activeCorpusId) || null,
+    [corpora, activeCorpusId],
+  );
+  // Refetch the relation total only when the corpus or its contents change,
+  // not on every corpora-list refresh.
+  const corpusEntityCount = activeCorpus?.entity_count;
+  const corpusChunkCount = activeCorpus?.chunk_count;
+
   useEffect(() => {
-    if (!activeCorpusId) {
-      setRelationCount(0);
-      return undefined;
-    }
+    // Clear first so a switched-to corpus never shows the previous total.
+    setRelationCount(0);
+    if (!activeCorpusId) return undefined;
     let cancelled = false;
     api
       .graphStats(activeCorpusId)
@@ -163,18 +171,11 @@ export default function App() {
           Object.values(byType).reduce((sum, n) => sum + Number(n || 0), 0),
         );
       })
-      .catch(() => {
-        if (!cancelled) setRelationCount(0);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [activeCorpusId, corpora]);
-
-  const activeCorpus = useMemo(
-    () => corpora.find((c) => c.corpus_id === activeCorpusId) || null,
-    [corpora, activeCorpusId],
-  );
+  }, [activeCorpusId, corpusEntityCount, corpusChunkCount]);
   const suggestions = useMemo(
     () => buildSuggestions(activeCorpus, snapshot),
     [activeCorpus, snapshot],
@@ -194,8 +195,14 @@ export default function App() {
 
   const [queryPathHighlights, setQueryPathHighlights] = useState([]);
 
+  // Synchronous in-flight guard: `busy` state lags a render, so a fast
+  // double-click on an example question could otherwise send two queries.
+  const askingRef = useRef(false);
+
   const handleAsk = useCallback(
     async (question) => {
+      if (askingRef.current) return;
+      askingRef.current = true;
       setBusy(true);
       setResult(null);
       setEvidenceHighlights([]);
@@ -237,6 +244,7 @@ export default function App() {
       } catch (err) {
         toast.error(err.message || "Query failed");
       } finally {
+        askingRef.current = false;
         setBusy(false);
       }
     },

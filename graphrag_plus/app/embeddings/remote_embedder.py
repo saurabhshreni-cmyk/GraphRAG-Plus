@@ -232,8 +232,8 @@ class RemoteEmbedder:
     Free-tier friendly:
 
     * A failed call pauses the provider instead of retrying on every request.
-      A rejected key (HTTP 400/401/403) pauses it for the life of the process;
-      anything transient (429 rate limit, 5xx, timeout) only for
+      A rejected key (HTTP 401/403) pauses it for the life of the process;
+      anything else (400, 429 rate limit, 5xx, timeout) only for
       ``_COOLDOWN_S``, so one burst can't switch semantic search off for hours.
     * Query embeddings are cached (LRU), so a repeated question, such as a
       clicked example, costs no API call.
@@ -269,7 +269,9 @@ class RemoteEmbedder:
 
     def _disable(self, exc: Exception) -> None:
         status = getattr(exc, "code", None)
-        permanent = status in (400, 401, 403)
+        # 400 is not here on purpose: Gemini also uses it for one bad input
+        # (e.g. an oversized chunk), which must not end semantic search.
+        permanent = status in (401, 403)
         with self._lock:
             if self._disabled:
                 return

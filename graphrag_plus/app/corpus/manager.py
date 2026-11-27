@@ -41,6 +41,9 @@ from graphrag_plus.app.utils.run_logger import utc_now_iso
 
 logger = get_logger(__name__)
 
+# Largest FAISS index stored with a corpus (~1,500 chunks at 1024 dims).
+MAX_PERSISTED_VECTOR_BYTES = 8_000_000
+
 # corpus_id arrives from API path params and flows into filesystem paths
 # (including ``shutil.rmtree``), so it must match this strict allowlist:
 # the literal ``corpus_`` prefix plus 1-64 word characters. Anything else
@@ -286,9 +289,18 @@ class CorpusManager:
         return index_path, index_path.with_suffix(index_path.suffix + ".meta.json")
 
     def _read_vectors(self, corpus_id: str) -> dict[str, object] | None:
-        """The corpus's saved FAISS index as a JSON-safe dict, or None."""
+        """The corpus's saved FAISS index as a JSON-safe dict, or None.
+
+        None as well above ``MAX_PERSISTED_VECTOR_BYTES``: a very large index
+        would bloat every row read and the free database tier, so such a
+        corpus is simply re-embedded per instance as before.
+        """
         index_path, meta_path = self._faiss_paths(corpus_id)
         if not index_path.exists() or not meta_path.exists():
+            return None
+        size = index_path.stat().st_size
+        if size > MAX_PERSISTED_VECTOR_BYTES:
+            logger.info("corpus.vectors_not_persisted id=%s bytes=%d (over cap)", corpus_id, size)
             return None
         try:
             return {

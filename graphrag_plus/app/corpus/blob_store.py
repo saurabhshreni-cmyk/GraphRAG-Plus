@@ -43,6 +43,12 @@ class CorpusBlobs:
     vectors: dict[str, Any] | None = None
 
 
+def vector_chunk_ids(vectors: dict[str, Any]) -> list[str]:
+    """Sorted chunk ids an exported FAISS index covers."""
+    meta = vectors.get("meta") or {}
+    return sorted(str(cid) for cid in meta.get("chunk_ids") or [])
+
+
 @runtime_checkable
 class BlobStore(Protocol):
     """Durable key/value store of corpora keyed by ``corpus_id``."""
@@ -68,7 +74,12 @@ class BlobStore(Protocol):
         ...
 
     def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
-        """Attach a FAISS index to an existing corpus. A no-op if it doesn't exist."""
+        """Attach a FAISS index to an existing corpus.
+
+        A no-op if the corpus doesn't exist, or if its stored chunks no longer
+        match ``vectors["meta"]["chunk_ids"]``: another instance re-ingested
+        it meanwhile, and its newer vectors must not be overwritten.
+        """
         ...
 
 
@@ -101,8 +112,12 @@ class InMemoryBlobStore:
 
     def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
         blobs = self._data.get(corpus_id)
-        if blobs is not None:
-            self._data[corpus_id] = replace(blobs, vectors=vectors)
+        if blobs is None:
+            return
+        stored_ids = sorted(str(c.get("chunk_id", "")) for c in blobs.chunks)
+        if stored_ids != vector_chunk_ids(vectors):
+            return
+        self._data[corpus_id] = replace(blobs, vectors=vectors)
 
 
 class PostgresBlobStore:
@@ -140,8 +155,14 @@ class PostgresBlobStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """)
-            # Added after the first release; IF NOT EXISTS migrates old tables.
-            cur.execute(f"ALTER TABLE {self._TABLE} ADD COLUMN IF NOT EXISTS vectors JSONB")
+            # Added after the first release. Check first: even a no-op ALTER
+            # takes a brief exclusive lock, and this runs on every cold start.
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = 'vectors'",
+                (self._TABLE,),
+            )
+            if cur.fetchone() is None:
+                cur.execute(f"ALTER TABLE {self._TABLE} ADD COLUMN IF NOT EXISTS vectors JSONB")
             conn.commit()
 
     # ------------------------------------------------------------------- ops
@@ -203,9 +224,20 @@ class PostgresBlobStore:
         from psycopg.types.json import Jsonb
 
         with self._connect() as conn, conn.cursor() as cur:
+            # Conditional on the stored chunk set still matching, so an
+            # instance that embedded an older version can't clobber newer
+            # vectors written by a concurrent ingest.
             cur.execute(
-                f"UPDATE {self._TABLE} SET vectors = %s WHERE corpus_id = %s",
-                (Jsonb(vectors), corpus_id),
+                f"""
+                UPDATE {self._TABLE} SET vectors = %s
+                WHERE corpus_id = %s
+                  AND COALESCE(
+                        (SELECT array_agg(c->>'chunk_id' ORDER BY c->>'chunk_id')
+                           FROM jsonb_array_elements(chunks) AS c),
+                        ARRAY[]::text[]
+                      ) = %s::text[]
+                """,
+                (Jsonb(vectors), corpus_id, vector_chunk_ids(vectors)),
             )
             conn.commit()
 

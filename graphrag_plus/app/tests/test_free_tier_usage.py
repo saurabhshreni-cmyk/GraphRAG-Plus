@@ -111,7 +111,10 @@ class TestVectorsTravelWithTheCorpus:
         bundle = instance_a.create(name="Nova", domain="general")
         bundle.retrieval.build_indexes(_chunks())
         instance_a.flush(bundle.meta.corpus_id)
-        store.save_vectors(bundle.meta.corpus_id, {"meta": {}, "index_b64": "not base64!"})
+        corrupt = {"meta": {"chunk_ids": ["c0", "c1"]}, "index_b64": "not base64!"}
+        store.save_vectors(bundle.meta.corpus_id, corrupt)
+        reloaded = store.load(bundle.meta.corpus_id)
+        assert reloaded is not None and reloaded.vectors == corrupt
 
         restored = CorpusManager(tmp_path / "b", blob_store=store).get(bundle.meta.corpus_id)
         assert restored.retrieval.faiss_store is not None
@@ -161,13 +164,65 @@ class TestTransientErrorsDoNotDisableForGood:
         assert embedder.available()
         assert len(embedder.embed_batch(["a"])[0]) == _DIM
 
-    @pytest.mark.parametrize("code", [400, 401, 403])
+    @pytest.mark.parametrize("code", [401, 403])
     def test_a_rejected_key_stays_disabled(self, code):
         clock = _Clock()
         embedder = RemoteEmbedder(_ScriptedProvider([_http_error(code)]), clock=clock)
         embedder.embed_batch(["a"])
         clock.now += 10 * RemoteEmbedder._COOLDOWN_S
         assert not embedder.available()
+
+    def test_a_bad_request_only_pauses(self):
+        # Gemini answers 400 for one bad input too (e.g. an oversized chunk);
+        # that must not switch semantic search off until the next restart.
+        clock = _Clock()
+        embedder = RemoteEmbedder(_ScriptedProvider([_http_error(400)]), clock=clock)
+        embedder.embed_batch(["a"])
+        clock.now += RemoteEmbedder._COOLDOWN_S + 1
+        assert embedder.available()
+
+
+class TestVectorWritesAreSafe:
+    """Review findings: no clobbering newer vectors, no unbounded rows."""
+
+    def _store_with_corpus(self, chunk_ids: list[str]):
+        from graphrag_plus.app.corpus.blob_store import CorpusBlobs
+
+        store = InMemoryBlobStore()
+        store.save(
+            CorpusBlobs(
+                meta={"corpus_id": "corpus_abc"},
+                graph={"nodes": [], "edges": []},
+                chunks=[{"chunk_id": cid} for cid in chunk_ids],
+            )
+        )
+        return store
+
+    def test_vectors_for_an_older_chunk_set_are_not_saved(self):
+        # Instance B embedded the old chunks while instance A re-ingested.
+        store = self._store_with_corpus(["c0", "c1", "c2"])
+        stale = {"meta": {"chunk_ids": ["c0", "c1"]}, "index_b64": "AAAA"}
+        store.save_vectors("corpus_abc", stale)
+        stored = store.load("corpus_abc")
+        assert stored is not None and stored.vectors is None
+
+    def test_vectors_for_the_current_chunks_are_saved(self):
+        store = self._store_with_corpus(["c1", "c0"])
+        current = {"meta": {"chunk_ids": ["c0", "c1"]}, "index_b64": "AAAA"}
+        store.save_vectors("corpus_abc", current)
+        stored = store.load("corpus_abc")
+        assert stored is not None and stored.vectors == current
+
+    def test_an_oversized_index_is_not_persisted(self, tmp_path: Path, monkeypatch):
+        from graphrag_plus.app.corpus import manager as manager_module
+
+        monkeypatch.setattr(manager_module, "MAX_PERSISTED_VECTOR_BYTES", 10)
+        mgr = CorpusManager(tmp_path, blob_store=InMemoryBlobStore())
+        corpus_id = mgr.create(name="Big", domain="general").meta.corpus_id
+        index_path, meta_path = mgr._faiss_paths(corpus_id)
+        index_path.write_bytes(b"x" * 11)
+        meta_path.write_text('{"chunk_ids": []}', encoding="utf-8")
+        assert mgr._read_vectors(corpus_id) is None
 
 
 class TestQueryCache:
