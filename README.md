@@ -73,27 +73,17 @@ Most RAG demos embed chunks, retrieve the top-k and hand them to an LLM. GraphRA
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Ingest["1 · Ingest"]
-        direction LR
-        A[PDF · DOCX · TXT<br/>MD · HTML · URL] --> B[Chunker<br/>SSRF-guarded]
-        B --> C[spaCy NER +<br/>LLM typed relations]
-        C --> D[(Knowledge graph<br/>entity resolution<br/>versioning)]
-        B --> E[(FAISS · BM25<br/>TF-IDF)]
-    end
-    subgraph Retrieve["2 · Retrieve"]
-        direction LR
-        Q([Question]) --> R{Hybrid retrieval<br/>keyword + dense + graph}
-        R -->|below calibrated floor| X([Abstain:<br/>NO_EVIDENCE])
-        R --> S[Score · trust<br/>calibration · conflicts]
-    end
-    subgraph Answer["3 · Answer"]
-        direction LR
-        G[Draft answer<br/>gpt-oss-20b] --> V[Reasoning verifier<br/>gpt-oss-120b] --> O([Answer + evidence<br/>+ confidence + trace])
-    end
-    D --> R
-    E --> R
-    S --> G
+flowchart LR
+    DOC[Documents<br/>PDF · DOCX · URL] --> EXT[spaCy NER +<br/>LLM relations]
+    EXT --> KG[(Knowledge graph<br/>+ entity resolution)]
+    DOC --> VEC[(FAISS · BM25<br/>TF-IDF)]
+    Q([Question]) --> RET{Hybrid<br/>retrieval}
+    KG --> RET
+    VEC --> RET
+    RET -->|relevant| DRAFT[Draft answer<br/>gpt-oss-20b]
+    RET -.->|below calibrated floor| ABS([Abstain:<br/>NO_EVIDENCE])
+    DRAFT --> VER[Verify against<br/>evidence<br/>gpt-oss-120b]
+    VER --> OUT([Answer · evidence<br/>confidence · trace])
 ```
 
 The same code runs in the cloud and fully offline; only the model providers change, chosen automatically from the environment:
