@@ -1,43 +1,100 @@
 # GraphRAG++
 
 [![CI](https://github.com/saurabhshreni-cmyk/GraphRAG-Plus/actions/workflows/ci.yml/badge.svg)](https://github.com/saurabhshreni-cmyk/GraphRAG-Plus/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-> A research-grade, production-ready **Graph-aware Retrieval-Augmented
-> Generation** backend with hybrid retrieval, source trust modeling,
-> confidence calibration, contradiction handling, and graph versioning.
+> A **trust-aware Graph RAG** system: it builds a knowledge graph from your
+> documents, answers questions with hybrid graph + vector + keyword
+> retrieval, has a second reasoning model check every answer against the
+> evidence, and says so plainly when the documents don't support an answer.
 
-GraphRAG++ ships as a **FastAPI backend** plus an optional **React + Vite
-+ Tailwind dashboard** that visualises the knowledge graph and explains,
-step by step, how each answer was reached.
+**▶ Live demo: [graphrag-plus-dashboard.vercel.app](https://graphrag-plus-dashboard.vercel.app)**
+ · API: [graphrag-plus-api.vercel.app/health](https://graphrag-plus-api.vercel.app/health)
+
+It opens on a small demo corpus. Try the example questions under the Ask box:
+*"Was Project Helios cancelled?"* shows contradiction handling, and
+*"What is the capital of France?"* shows it refusing a question the documents
+can't answer. Or upload your own PDF / DOCX / TXT / MD / HTML file.
+
+The whole stack runs on **free tiers with no credit card**: Vercel, Groq,
+Gemini and Neon. See [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md).
 
 ---
 
 ## Why this project matters
 
-Traditional RAG pipelines have three blind spots that make them hard to
-trust in real applications:
+Traditional RAG pipelines have blind spots that make them hard to trust:
 
 1. **They retrieve, but don't reason about *which sources to trust*.**
-   GraphRAG++ maintains per-source trust priors that update with every
+   GraphRAG++ keeps per-source trust priors that update with every
    contradiction or low-confidence answer.
 2. **They emit a confidence number that doesn't mean anything.**
-   GraphRAG++ runs a calibration module so the confidence you see actually
-   correlates with answer correctness.
+   A calibration module maps raw scores to a probability that tracks
+   correctness.
 3. **They silently paper over conflicting evidence.**
-   GraphRAG++ runs a real contradiction reasoner at ingestion, persists
-   the disagreement signal, and surfaces conflicting sources at query
-   time with explicit resolution rationale.
+   A contradiction reasoner runs at ingestion, persists the disagreement,
+   and surfaces conflicting sources at query time with a resolution.
+4. **They answer anyway.** GraphRAG++ abstains (`NO_EVIDENCE`) when retrieval
+   finds nothing relevant, and a reasoning model re-checks every generated
+   answer against the evidence before it is shown.
 
-On top of that you get **graph versioning** (every ingest snapshots the
-graph and tags answers with the version they were derived from, so you
-can detect when a stored answer goes stale), **active learning queues**
-for low-confidence cases, an **analyst mode** that returns reasoning
-steps + follow-up questions, and a Prometheus `/metrics` endpoint with
-per-stage latency histograms.
+On top of that: **graph versioning** (answers are tagged with the graph
+version they came from and flagged `stale` when it changes), **entity
+resolution** ("Apple", "Apple Inc" and "Apple Incorporated" become one
+node), an **analyst mode** with reasoning steps and follow-up questions, and a
+Prometheus `/metrics` endpoint.
+
+---
+
+## How a question is answered
+
+```
+ upload / URL
+      │
+      ▼
+ ┌──────────────┐   ┌───────────────────────────┐   ┌─────────────────────┐
+ │ ingestion    │──▶│ extraction                │──▶│ knowledge graph     │
+ │ PDF/DOCX/... │   │ spaCy NER  +  LLM typed   │   │ + entity resolution │
+ │ SSRF-guarded │   │ relations (Groq / Ollama) │   │ + versioning        │
+ └──────────────┘   └───────────────────────────┘   └─────────────────────┘
+      │                         │                              │
+      ▼                         ▼                              │
+ ┌──────────────┐   ┌───────────────────────────┐              │
+ │ chunks       │──▶│ FAISS embeddings (Gemini  │              │
+ │ BM25, TF-IDF │   │ or local bge-large)       │              │
+ └──────────────┘   └───────────────────────────┘              │
+                                                               │
+ question ──▶ hybrid retrieval: BM25 + dense + graph signal ◀──┘
+                 │   (relevance floors calibrated per embedding model)
+                 ▼
+            scoring + trust + calibration ──▶ no evidence? ──▶ abstain
+                 │
+                 ▼
+            draft answer (gpt-oss-20b / local LLM), grounded in the evidence
+                 │
+                 ▼
+            reasoning verifier (gpt-oss-120b / DeepSeek R1) checks the draft
+                 │
+                 ▼
+            answer + calibrated confidence + evidence + conflicts + reasoning trace
+```
+
+The same code runs locally and in the cloud; only the model providers change:
+
+| Stage | Cloud (live demo) | Local |
+|---|---|---|
+| Relation extraction | Groq `openai/gpt-oss-20b` (JSON mode) | Ollama `qwen3.5:4b` |
+| Draft answers | Groq `openai/gpt-oss-20b` | Ollama `qwen3.5:4b` |
+| Answer verification | Groq `openai/gpt-oss-120b`, high reasoning effort | Ollama `deepseek-r1:8b` |
+| Embeddings | Gemini `gemini-embedding-001`, 1024-dim | `BAAI/bge-large-en-v1.5`, 1024-dim |
+| Graph signal | In-process graph (entity matches) | Neo4j Personalized PageRank when `NEO4J_*` is set |
+| Corpus storage | Neon Postgres, shared by every serverless instance | Local disk |
+
+Every model is optional: without an LLM the system answers extractively;
+without embeddings it uses BM25 + TF-IDF + the graph.
 
 ---
 
@@ -45,342 +102,166 @@ per-stage latency histograms.
 
 | Feature | What it does |
 |---------|--------------|
-| **Hybrid retrieval** | Vector + BM25 + graph expansion fused with weighted scoring |
-| **Source trust modeling** | Per-source Beta-style priors that update on contradictions and corrections |
-| **Confidence calibration** | Maps raw model confidence to a calibrated probability |
-| **Contradiction reasoning** | Detects disagreement on `(subject, predicate)` claims, persists the signal, threads it into query responses |
-| **Graph versioning** | Snapshots the graph on every ingest; flags answers as `stale` when their supporting nodes change |
-| **Failure-mode classifier** | Typed states: `NO_EVIDENCE`, `LOW_CONFIDENCE`, `CONFLICTING_EVIDENCE`, `HIGH_UNCERTAINTY`, `LLM_FAILURE` |
-| **Active learning queue** | Routes low-confidence and conflicting cases to a JSONL review queue |
-| **Analyst mode** | Returns explicit reasoning steps and follow-up questions for human review |
-| **Optional GNN reranker** | Tiny PyTorch MLP over candidate features; deterministic linear-blend fallback when torch isn't installed |
-| **SSRF-hardened ingestion** | Scheme allowlist, private/loopback/link-local IP block, manual redirect re-validation, response size cap |
-| **Prometheus `/metrics`** | Counters + histograms for queries, ingest, per-module latency, and per-stage errors |
-| **Reproducibility** | Global seeding (random / numpy / torch), per-query JSON artifacts, JSONL run logs |
+| **Hybrid retrieval** | BM25 + dense vectors (FAISS) + graph signal, blended with weights; relevance floors calibrated per embedding model ([`calibrate_backend.py`](graphrag_plus/scripts/calibrate_backend.py)) |
+| **LLM knowledge graph** | spaCy NER plus LLM-extracted typed relations (`acquired`, `founded_by`, `headquartered_in`, …) |
+| **Entity resolution** | Merges aliases and legal-suffix variants, without folding products into their company ("Apple Music" stays separate) |
+| **Reasoning verification** | A second, larger model checks each draft against the evidence and can correct it; the UI shows which model checked it and what it looked at |
+| **Contradiction reasoning** | Flags disagreement on single-valued facts (`status`, `founded_in`, …), not on multi-valued ones (`based_in`, `acquired`) |
+| **Abstention** | Typed failure modes: `NO_EVIDENCE`, `LOW_CONFIDENCE`, `CONFLICTING_EVIDENCE`, `HIGH_UNCERTAINTY`, `LLM_FAILURE` |
+| **Source trust + calibration** | Per-source priors that update on contradictions; calibrated confidence |
+| **Graph versioning** | Snapshots the graph on every ingest; flags stored answers `stale` when their supporting nodes change |
+| **Multi-corpus isolation** | Each upload is its own corpus with its own graph and indexes; the demo corpus is protected from deletion |
+| **Free-tier friendly** | Embeddings are stored with each corpus and reused across serverless instances; query embeddings are cached; transient API errors pause rather than disable |
+| **Public-demo safety** | Per-client rate limits (queries, ingests, deletes), a 4 MB upload cap, SSRF-guarded URL fetching, and API keys / database URLs redacted from every log line |
+| **Observability** | Prometheus `/metrics`, per-stage latency, per-query JSON artifacts, JSONL run logs |
 
 ---
 
-## Architecture
+## Quick start (local)
 
-```
-   files / URLs
-        │
-        ▼
-  ┌──────────────┐         ┌────────────────────┐
-  │  ingestion   │── chunks│   extraction       │── entities, relations
-  │ (SSRF guard) │────────▶│ (rule-based)       │
-  └──────────────┘         └────────────────────┘
-                                     │
-                                     ▼
-                           ┌────────────────────┐
-                           │ contradiction      │  per-chunk
-                           │ reasoner (opt)     │  conflict map
-                           └────────────────────┘
-                                     │
-                                     ▼
-                           ┌────────────────────┐
-                           │ graph store        │  NetworkX-backed,
-                           │ + versioning       │  snapshot per ingest
-                           └────────────────────┘
-                                     │
-                                     │
-   question  ──────────────────────▶ │
-                           ┌────────────────────┐
-                           │ retrieval (hybrid) │  vector + BM25 +
-                           │                    │  graph expansion
-                           └────────────────────┘
-                                     │
-                           ┌────────────────────┐
-                           │ scoring + GNN(opt) │  weighted blend
-                           └────────────────────┘
-                                     │
-                           ┌────────────────────┐
-                           │ calibration + trust│  per-source priors
-                           └────────────────────┘
-                                     │
-                           ┌────────────────────┐
-                           │ failure classifier │  abstain / partial /
-                           │ + analyst (opt)    │  conflict resolution
-                           └────────────────────┘
-                                     │
-                                     ▼
-                            QueryResponse JSON
-```
-
----
-
-## Installation
-
-GraphRAG++ supports **Python 3.11, 3.12, and 3.13**. Python 3.14 is not
-targeted yet because several scientific Python dependencies are still
-catching up. Heavy dependencies (PyTorch,
-sentence-transformers, FAISS, etc.) are **opt-in** so the base install
-stays lightweight (~150 MB).
+Python **3.11 – 3.13** and Node 18+.
 
 ```bash
 git clone https://github.com/saurabhshreni-cmyk/GraphRAG-Plus.git
 cd GraphRAG-Plus
+python -m venv venv
+. venv/bin/activate                    # Windows: venv\Scripts\activate
+pip install -r requirements.txt        # the same bundle the cloud API runs
 
-python -m venv .venv
-. .venv/bin/activate                  # Windows: .venv\Scripts\activate
-python -m pip install -U pip
-
-cd graphrag_plus
-
-python -m pip install -e .            # core (lightweight)
-python -m pip install -e .[dev]       # + ruff/black/mypy/pytest-cov
-python -m pip install -e .[gnn]       # + torch / torch-geometric
-python -m pip install -e .[embeddings]   # + sentence-transformers, faiss
-python -m pip install -e .[extras]    # + neo4j, chromadb, spacy
+# API on :8765 (the dashboard's default)
+PYTHONPATH=. uvicorn graphrag_plus.app.api.main:app --port 8765
 ```
 
-Optional modules **degrade gracefully**: the GNN reranker uses a
-deterministic linear blend when torch is missing, and `/metrics` returns
-a lightweight fallback when `prometheus-client` is absent.
+```bash
+cd frontend
+npm install
+npm run dev                            # http://localhost:5173
+```
+
+Models are picked up automatically:
+
+- **Ollama** running locally → local LLM extraction, answers and DeepSeek R1 verification.
+- **`GROQ_API_KEY`** → Groq instead.
+- **`GEMINI_API_KEY`** → Gemini embeddings. Install `sentence-transformers` to use local bge-large instead.
+- **`GRAPHRAG_DATABASE_URL`** → Postgres storage.
+- **`NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD`** → Neo4j graph with Personalized PageRank.
+
+Package extras for development (`cd graphrag_plus`):
+
+```bash
+pip install -e .[dev]          # pytest, ruff, black, mypy, faiss
+pip install -e .[embeddings]   # sentence-transformers + faiss (local bge-large)
+pip install -e .[extras]       # neo4j, spacy, ...
+pip install -e .[gnn]          # optional torch reranker
+```
 
 ---
 
-## Usage
+## Deployment (free, no card)
 
-### CLI
+| Layer | Service |
+|---|---|
+| Dashboard | Vercel project `graphrag-plus-dashboard` (root `frontend/`), deploys from `main` |
+| API | Vercel Python project `graphrag-plus-api` (repo root, served from [`index.py`](index.py)), deploys from `main` |
+| LLMs | Groq free API |
+| Embeddings | Gemini free API (Jina as a fallback) |
+| Storage | Neon Postgres free plan |
 
-```bash
-# Ingest sample documents
-python -m graphrag_plus.app.cli ingest \
-  --files graphrag_plus/data/sample_docs/sample1.txt \
-          graphrag_plus/data/sample_docs/sample2.txt
+Step-by-step setup is in **[deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md)**: keys, Neon, calibrating
+the relevance floors for your embedding model, and environment variables.
 
-# Ask a question (analyst mode shows reasoning steps)
-python -m graphrag_plus.app.cli query \
-  --question "Which source contradicts the cancellation claim?" \
-  --analyst-mode
+Notes on the serverless design:
 
-# Run the lightweight benchmark
-python -m graphrag_plus.app.cli evaluate
+- **Storage:** writable paths are redirected to `/tmp`, and Postgres is the source of truth.
+  Each corpus (metadata, graph, chunks and its FAISS index) is one row, hydrated on demand by
+  whichever instance serves the request.
+- **Demo corpus:** seeded on boot, so the site always has something to show.
+- **No PyTorch or Neo4j in the cloud bundle:** it stays at about 370 MB, well under Vercel's
+  500 MB limit for Python.
 
-# Run the ablation matrix
-python -m graphrag_plus.app.cli run_ablation
-```
+---
 
-### REST API
-
-```bash
-uvicorn graphrag_plus.app.api.main:app --reload
-```
+## REST API
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET`  | `/health`           | Liveness + capability info |
-| `POST` | `/ingest`           | Ingest files/URLs into a new or existing corpus (optional `corpus_name`) |
-| `POST` | `/query`            | Hybrid retrieval + answer generation (optional `corpus_id`) |
-| `GET`  | `/corpora`          | List all corpora (newest first) |
-| `GET`  | `/corpora/active`   | Currently active corpus |
+| `GET`  | `/health` | Liveness + whether an LLM is enabled |
+| `POST` | `/ingest/file` | Upload one document (multipart, ≤ 4 MB) into a new or existing corpus |
+| `POST` | `/ingest` | Ingest URLs (or server-side file paths when self-hosted) |
+| `POST` | `/query` | Hybrid retrieval + generated, verified answer (optional `corpus_id`) |
+| `GET`  | `/corpora` | List corpora (newest first) with counts and a `deletable` flag |
+| `GET`  | `/corpora/active` | The active corpus |
 | `POST` | `/corpora/{id}/select` | Switch the active corpus |
-| `DELETE` | `/corpora/{id}`   | Permanently delete a corpus |
-| `GET`  | `/graph`            | Graph snapshot (nodes + edges) for visualization |
-| `GET`  | `/graph/{node_id}`  | Neighborhood for a graph node |
-| `GET`  | `/evaluate`         | Run the lightweight benchmark |
-| `GET`  | `/metrics`          | Prometheus exposition |
-
-Each ingest call creates an **isolated corpus** by default (preventing
-cross-domain contamination); the corpus's domain is auto-detected from
-its text (machine learning, physics, finance, biology, chemistry,
-mathematics, computer science, or general).
-
-CORS origins are controlled by `GRAPHRAG_CORS_ORIGINS` (comma-separated).
-Defaults cover the local Vite dev servers (`http://localhost:5173`,
-`http://127.0.0.1:5173`).
-
-#### Example: ingest + query
+| `DELETE` | `/corpora/{id}` | Delete a corpus (the demo corpus is refused) |
+| `GET`  | `/corpora/{id}/chunks` | Paginated chunks of a corpus |
+| `GET`  | `/graph` | Graph snapshot for visualization (`mode=important\|full`) |
+| `GET`  | `/graph/{corpus_id}/full` | Full graph of a corpus |
+| `GET`  | `/graph/{corpus_id}/stats` | Node/relationship counts by type, most-connected entities |
+| `GET`  | `/graph/{corpus_id}/query-path?q=` | Entities a question traverses (drives the red path in the UI) |
+| `GET`  | `/graph/{corpus_id}/entity/{name}` | An entity with its neighbours and source chunks |
+| `GET`  | `/graph/{node_id}` | Neighbourhood of a graph node |
+| `GET`  | `/evaluate` | Run the lightweight benchmark |
+| `GET`  | `/metrics` | Prometheus exposition |
 
 ```bash
-# Ingest
-curl -X POST http://127.0.0.1:8000/ingest \
+curl -X POST https://graphrag-plus-api.vercel.app/query \
   -H "Content-Type: application/json" \
-  -d '{
-    "file_paths": [
-      "graphrag_plus/data/sample_docs/sample1.txt",
-      "graphrag_plus/data/sample_docs/sample2.txt"
-    ],
-    "urls": []
-  }'
-
-# Query
-curl -X POST http://127.0.0.1:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "Which source contradicts the cancellation claim?",
-    "top_k": 3,
-    "analyst_mode": true
-  }'
+  -d '{"question": "Was Project Helios cancelled?", "corpus_id": "corpus_demo_nova"}'
 ```
 
-Sample response (truncated):
+Abridged response:
 
 ```json
 {
-  "query_id": "qry_0b191bd16950",
-  "answer": "Partial answer: On 2024-02-10, another source contradicts ...",
-  "raw_confidence": 0.5,
-  "calibrated_confidence": 0.5,
-  "calibration_error": 0.0,
-  "evidence": [{"id": "doc_e08…_ch_0", "trust_score": 0.5, "final_score": 0.52}],
-  "failure_type": "LOW_CONFIDENCE",
-  "mitigation_strategy_used": "partial_answer_with_warning",
-  "reasoning_steps": [
-    "Parsed question and decomposed into subqueries.",
-    "Retrieved hybrid evidence from vector, keyword, and graph signals.",
-    "Applied uncertainty-aware reranking with trust and confidence."
-  ],
-  "graph_version_id": "v20260426080950619019",
-  "answer_state": "updated"
+  "answer": "No. The source on 2024-02-10 contradicts the claim that Project Helios was canceled and indicates that it is continuing under Phase II.",
+  "generated_by": "llm",
+  "verified_by_reasoning": true,
+  "reasoning_model": "openai/gpt-oss-120b",
+  "calibrated_confidence": 0.75,
+  "failure_type": null,
+  "evidence": [{"source_id": "doc_sample2", "raw_semantic": 0.79, "raw_bm25": 0.41, "final_score": 0.9}],
+  "reasoning_steps": ["Parsed question and decomposed into subqueries.", "..."],
+  "graph_version_id": "v20261127045544009648"
 }
 ```
 
-More ready-to-run requests live in
+Public-demo rate limits per client (env-tunable):
+
+| Requests | Limit | Variable |
+|---|---|---|
+| `/query` | 20 per minute | `GRAPHRAG_RATE_QUERY_PER_MIN` |
+| `/ingest*` | 6 per 10 minutes | `GRAPHRAG_RATE_INGEST_PER_10MIN` |
+| Corpus deletes | 10 per 10 minutes | `GRAPHRAG_RATE_DELETE_PER_10MIN` |
+
+Turn them all off locally with `GRAPHRAG_RATE_LIMIT=0`. More ready-to-run
+requests are in
 [`graphrag_plus/examples/api_requests.http`](graphrag_plus/examples/api_requests.http).
 
 ---
 
-## Frontend dashboard
+## Dashboard
 
-The `frontend/` folder is a **React 18 + Vite 5 + Tailwind 3** SPA that
-talks to the FastAPI backend over the `VITE_API_BASE` URL.
+`frontend/` is a **React 18 + Vite 5 + Tailwind 3** app.
 
-Highlights:
-
-- Dark-by-default UI with a polished light mode toggle
-- Glassmorphism cards, Framer Motion transitions, micro-interactions
-- **Interactive knowledge-graph view** (`react-force-graph-2d`) — zoom,
-  pan, hover, color-coded by node type
-- **Reasoning Story** panel — five animated steps explaining how the
-  answer was reached, with synchronized graph-node highlighting
-- Animated calibrated-confidence bar, failure-mode badge, evidence list
-- Toast notifications for success/error, loading skeletons, spinner states
-
-Run it locally (with the backend already running on `:8765`):
-
-```bash
-cd frontend
-cp .env.example .env       # optional — defaults to local backend
-npm install
-npm run dev                # http://localhost:5173
-```
-
-Build for production:
-
-```bash
-npm run build              # outputs to frontend/dist
-npm run preview            # http://localhost:4173
-```
-
-See [`frontend/README.md`](frontend/README.md) for full notes.
-
-### Resume demo dataset
-
-The repo includes a small curated local demo corpus at
-`graphrag_plus/data/corpora/corpus_demo_nova/`, generated from the sample
-documents in `graphrag_plus/data/sample_docs/`. It gives the dashboard an
-immediate graph to render after startup while keeping generated logs,
-query outputs, and scratch corpora out of version control.
-
-Good local demo questions:
-
-- `Which source contradicts the cancellation claim?`
-- `What did Nova Dynamics acquire?`
-- `How are Orion Labs and Project Helios connected?`
-
----
-
-## Deployment
-
-### Live demo (Vercel)
-
-| Surface | URL |
-|---------|-----|
-| Dashboard | https://graphrag-plus-dashboard.vercel.app |
-| API | https://graphrag-plus-api.vercel.app (try [`/health`](https://graphrag-plus-api.vercel.app/health)) |
-
-The backend runs as a **Vercel Python serverless function** via
-[`api/index.py`](api/index.py): all writable paths are redirected to
-`/tmp` through `GRAPHRAG_*` env overrides, and the demo corpus is seeded
-on boot so queries work immediately.
-
-By default `/tmp` is ephemeral, so corpora ingested on the demo survive
-only per serverless instance. **Add a free Postgres database (below) and
-ingested corpora become durable and shared across every instance — no
-paid host or disk required.**
-
-To deploy your own copy:
-
-```bash
-vercel link --project my-graphrag-api && vercel deploy --prod   # repo root = backend
-cd frontend
-vercel link --project my-graphrag-dashboard
-vercel env add VITE_API_BASE production    # https://<your-api>.vercel.app
-vercel deploy --prod
-# then on the backend project:
-vercel env add GRAPHRAG_CORS_ORIGINS production   # https://<your-dashboard>.vercel.app
-vercel deploy --prod
-```
-
-### Durable storage for free — Supabase / Postgres (recommended)
-
-Set a single env var and the backend persists every corpus as JSON blobs
-in Postgres instead of ephemeral `/tmp`. Each corpus is stored as three
-`jsonb` documents (`meta`, `graph`, `chunks`) in one auto-created table
-(`graphrag_corpora`); the serverless instance's `/tmp` becomes scratch
-that is hydrated from the database on demand. Works on the **Supabase
-free tier** (or Neon, or any Postgres).
-
-1. Create a free project at [supabase.com](https://supabase.com).
-2. Project → **Connect** → copy the **connection pooler** URI (port
-   `6543`, transaction mode — the pooler is the right choice for
-   serverless). It looks like:
-   ```
-   postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
-   ```
-3. Set it on the **backend** Vercel project and redeploy:
-   ```bash
-   vercel env add GRAPHRAG_DATABASE_URL production   # paste the pooler URI
-   vercel deploy --prod
-   ```
-   (A bare `DATABASE_URL` is also honoured.) The table is created
-   automatically on first boot.
-4. Optional — validate the connection before/after deploy:
-   ```powershell
-   $env:GRAPHRAG_DATABASE_URL="postgresql://...:6543/postgres"
-   py -3.13 graphrag_plus/scripts/check_postgres.py   # prints OK on success
-   ```
-
-When `GRAPHRAG_DATABASE_URL` is **unset**, the backend uses file storage
-(local disk / `/tmp`) exactly as before — Postgres is purely additive and
-the app degrades gracefully (falls back to file mode) if the database is
-ever unreachable.
-
-> **Consistency note:** each instance caches a hydrated corpus for its
-> warm lifetime, so a corpus updated by another instance becomes visible
-> after the next cold start or cache miss (eventual consistency). For the
-> demo's scale that's invisible; for heavy concurrent writes, run a single
-> always-on instance or add per-request freshness checks.
-
-### Single-host alternative — Render / Railway / Fly.io
-
-Prefer one always-on instance with a disk? Install `-e .`, set
-`PYTHONPATH=..`, point the `GRAPHRAG_*` paths at a mounted volume, and run
-`uvicorn graphrag_plus.app.api.main:app --host 0.0.0.0 --port $PORT`. The
-same file-based store is used; no database needed.
-
-### Frontend — Vercel
-
-1. **Import Project** → point at this repo, pick the `frontend/` folder
-   as the project root (Vercel auto-detects Vite).
-2. **Build command:** `npm run build` (default).
-3. **Output directory:** `dist` (default).
-4. **Environment variables:**
-   - `VITE_API_BASE=https://<your-backend-domain>`
-5. After deploy, copy the Vercel URL into the backend's
-   `GRAPHRAG_CORS_ORIGINS` env var so CORS preflights succeed.
+- **Ingest:** drag-and-drop upload or web page URLs. When self-hosted, server
+  file paths too.
+- **Ask:**
+  - example questions tailored to the open corpus
+  - LLM / extractive strategy switch
+  - a typed failure badge when the system abstains
+- **Answer:**
+  - calibrated-confidence bar and evidence with per-signal scores
+  - a "Verified by …" badge naming the model that checked the answer
+  - an expandable view of what it checked
+- **Knowledge graph** (`react-force-graph-2d`):
+  - search and type filters, fit-to-panel, readable labels at any zoom
+  - the question's retrieval path highlighted in red
+  - entity details with source chunks
+- **Reasoning story:** a step-by-step trace of how the answer was reached,
+  synchronised with the graph.
+- **Workspaces:** switch between isolated corpora, delete your uploads, and
+  see real document / chunk / entity / relation counts.
+- **Layout and themes:** works down to phone width; dark and light themes.
 
 ---
 
@@ -388,99 +269,79 @@ same file-based store is used; no database needed.
 
 ```
 GraphRAG-Plus/
-├── README.md                   ← you are here
-├── LICENSE                     ← MIT
-├── .github/workflows/ci.yml    ← lint, format check, mypy, tests with coverage
+├── index.py                    ← Vercel entrypoint (FastAPI app)
+├── requirements.txt            ← the deployed API bundle
+├── vercel.json                 ← function settings (300 s max duration)
+├── deploy/DEPLOYMENT.md        ← free deployment guide
 ├── frontend/                   ← React + Vite + Tailwind dashboard
-│   ├── package.json
-│   ├── tailwind.config.js
-│   ├── vite.config.js
-│   ├── public/favicon.svg
 │   └── src/
-│       ├── App.jsx             ← layout + state orchestration
-│       ├── api.js              ← typed wrapper around FastAPI calls
-│       └── components/         ← Header, IngestPanel, QueryBox, ResultCard,
-│                                 ConfidenceBar, GraphView, ReasoningStory,
-│                                 ThemeToggle, Spinner
+│       ├── App.jsx             ← layout + state
+│       ├── api.js              ← API client
+│       ├── suggestions.js      ← corpus-aware example questions
+│       └── components/         ← IngestPanel, QueryBox, ResultCard, GraphView,
+│                                 ReasoningStory, CorpusSelector, Header, ...
 └── graphrag_plus/
     ├── pyproject.toml          ← deps, extras, ruff/black/mypy/coverage config
-    ├── .env.example
-    ├── app/
-    │   ├── pipeline.py         ← end-to-end orchestration
-    │   ├── api/                ← FastAPI service
-    │   ├── cli.py
-    │   ├── config/             ← Pydantic settings (env-prefixed GRAPHRAG_*)
-    │   ├── ingestion/          ← file + URL loaders (SSRF-guarded), chunker
-    │   ├── extraction/         ← entity / relation extraction
-    │   ├── contradiction/      ← (subject, predicate) disagreement detection
-    │   ├── graph/              ← NetworkX store + versioning manager
-    │   ├── corpus/             ← multi-corpus manager (isolated graphs + indexes)
-    │   ├── domain/             ← keyword-frequency domain classifier
-    │   ├── retrieval/          ← vector + BM25 + graph expansion
-    │   ├── scoring/            ← weighted score blend
-    │   ├── gnn/                ← optional torch reranker (with fallback)
-    │   ├── calibration/        ← confidence calibration
-    │   ├── trust/              ← per-source trust priors
-    │   ├── failure/            ← typed failure-mode classifier
-    │   ├── active_learning/    ← review queue for low-confidence/conflict
-    │   ├── analyst/            ← analyst-mode reasoning + follow-ups
-    │   ├── evaluation/         ← benchmark + ablation runners
-    │   ├── planning/           ← query intent heuristics
-    │   ├── schemas/            ← Pydantic request/response models
-    │   ├── utils/              ← logging, IO, metrics, run logger, runtime
-    │   └── tests/              ← pytest suite (66 tests)
-    ├── data/
-    │   └── sample_docs/        ← shipped samples for the quickstart
-    ├── scripts/                ← PowerShell helpers (demo, run_api, etc.)
-    └── examples/api_requests.http
+    ├── scripts/                ← calibrate_backend.py, check_postgres.py, quality gate
+    └── app/
+        ├── pipeline.py         ← end-to-end orchestration
+        ├── api/                ← FastAPI routes, rate limiting, serverless entry
+        ├── ingestion/          ← file + URL loaders (SSRF-guarded), chunker
+        ├── extraction/         ← spaCy NER + LLM relation extraction (Ollama / Groq)
+        ├── graph/              ← NetworkX + Neo4j stores, entity resolution, versioning
+        ├── corpus/             ← multi-corpus manager, Postgres blob store, demo seed
+        ├── embeddings/         ← local + remote (Gemini/Jina) embedders, FAISS store
+        ├── retrieval/          ← hybrid BM25 + dense + graph retrieval, TF-IDF
+        ├── generation/         ← answer generation, LLM clients, reasoning verifier
+        ├── contradiction/      ← single-valued-fact disagreement detection
+        ├── scoring/ trust/ calibration/ failure/ analyst/ planning/ ...
+        ├── utils/              ← logging (with secret redaction), HTTP helpers, IO
+        └── tests/              ← pytest suite (254 tests)
 ```
 
 ---
 
 ## Tech stack
 
-- **Python 3.11, 3.12, or 3.13**
-- **FastAPI** + **Uvicorn** — REST surface
-- **Pydantic v2** — request/response models, settings
-- **NetworkX** — in-memory graph store
-- **rank-bm25** + **scikit-learn** — keyword + vector retrieval
-- **PyTorch** *(optional)* — GNN reranker
-- **prometheus-client** — `/metrics` exposition
-- **httpx** + **BeautifulSoup** + **pypdf** — ingestion adapters
-- **pytest** + **ruff** + **black** + **mypy** — quality gate
-- **GitHub Actions** — CI on Python 3.11 and 3.12
+- **Backend:** Python 3.11–3.13, FastAPI, Pydantic v2
+- **Retrieval:** rank-bm25, a NumPy TF-IDF index, FAISS
+- **NLP:** spaCy `en_core_web_sm`, plus LLMs via Groq (gpt-oss-20b / 120b) or Ollama (qwen3.5, DeepSeek R1)
+- **Embeddings:** Gemini `gemini-embedding-001`, Jina, or local `sentence-transformers` (bge-large)
+- **Graph:** NetworkX in-process; Neo4j optional (Personalized PageRank)
+- **Storage:** Postgres (Neon) via psycopg 3, or local disk
+- **Frontend:** React 18, Vite 5, Tailwind 3, Framer Motion, react-force-graph-2d
+- **Hosting:** Vercel (serverless Python + static site), all free tiers
+- **Quality:** pytest (254 tests), ruff, black, mypy, and GitHub Actions on Python 3.11 and 3.12
 
 ---
 
 ## Configuration
 
-Settings live in `graphrag_plus/app/config/settings.py` and are loadable
-from environment variables (prefix `GRAPHRAG_`) or a local `.env`.
+Settings live in [`graphrag_plus/app/config/settings.py`](graphrag_plus/app/config/settings.py)
+(env prefix `GRAPHRAG_`, or a local `.env`). The cloud-specific variables are:
 
-Notable flags:
+| Variable | Purpose |
+|---|---|
+| `GROQ_API_KEY` | Groq LLMs for extraction, answers and verification |
+| `GEMINI_API_KEY` / `JINA_API_KEY` | Hosted embeddings |
+| `GRAPHRAG_DATABASE_URL` | Postgres for durable, shared corpora |
+| `GRAPHRAG_MIN_COSINE_SEMANTIC`, `GRAPHRAG_STRONG_COSINE_SEMANTIC`, `GRAPHRAG_RESOLVER_EMBEDDING_THRESHOLD` | Calibrated per embedding model by `calibrate_backend.py` |
+| `GRAPHRAG_CORS_ORIGINS` | Allowed dashboard origins |
+| `GRAPHRAG_MAX_UPLOAD_BYTES` | Upload cap (default 4 MB) |
 
-- `enable_calibration`, `use_calibration`
-- `enable_contradiction`
-- `enable_active_learning`
-- `use_gnn`, `use_graph`, `use_vector`, `use_trust`
-- `answer_threshold`, `high_uncertainty_threshold`
-- `random_seed`
-
-Settings are validated at startup (weight ranges, threshold bounds,
-`chunk_overlap < chunk_size`).
+The full list is in the [deployment guide](deploy/DEPLOYMENT.md#environment-variable-reference).
 
 ---
 
 ## Observability
 
-Every query response and ingest call records:
+Every query and ingest records:
 
-- `query_id`, `graph_version_id`, `answer_state` (`updated` / `stale`)
-- raw + calibrated confidence + calibration error
-- per-evidence `trust_score`, `semantic_score`, `graph_score`, `final_score`
-- typed `failure_type` and `mitigation_strategy_used`
-- artifact under `data/outputs/<query_id>.json`
-- run-log line in `data/run_logs.jsonl` with per-module latency
+- the `query_id`, `graph_version_id` and `answer_state`
+- raw and calibrated confidence
+- per-evidence trust, semantic, BM25, graph and final scores
+- the typed `failure_type`
+- per-stage latency
 
 `GET /metrics` exposes Prometheus counters and histograms:
 
@@ -489,9 +350,11 @@ graphrag_queries_total{failure_type="..."}
 graphrag_query_latency_seconds_{count,sum,bucket}
 graphrag_module_latency_seconds_{count,sum,bucket}{module="..."}
 graphrag_ingest_total
-graphrag_ingest_documents_total
 graphrag_stage_errors_total{stage="..."}
 ```
+
+Logs never contain secrets: a logging filter replaces API keys, bearer
+tokens and database URLs with `[REDACTED]`.
 
 ---
 
@@ -499,7 +362,7 @@ graphrag_stage_errors_total{stage="..."}
 
 ```bash
 cd graphrag_plus
-python -m pip install -e .[dev]
+pip install -e .[dev]
 
 ruff check .
 black --check .
@@ -507,56 +370,35 @@ mypy app
 pytest --cov=app --cov-report=term-missing
 ```
 
-CI runs on every push / PR (Python 3.11 & 3.12) — see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs all four on every push and PR, on Python 3.11 and 3.12
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Changes reach
+`main` through pull requests; Vercel builds a preview of both projects for
+each PR and deploys production from `main`.
 
-### Local pre-trust gate
-
-On Windows, run the local quality gate from the repository root before
-trusting answer-quality changes or demoing the app:
-
-```powershell
-.\graphrag_plus\scripts\quality_gate.ps1
-```
-
-The gate sets `PYTHONPATH`, applies safe Python autofixes (`ruff --fix`
-and `black`) only when run with `-Fix`. By default it is verify-only: it
-runs the install check, `ruff`, `black --check`, `mypy`, and the backend
-pytest suite, then builds the frontend. It does not start, stop, ingest,
-reset, or mutate runtime graph data. Pass `-ProbeHealth` when you already
-have the backend running and want the gate to check `127.0.0.1:8765/health`.
-
-```powershell
-# Optional: allow the gate to format/fix before verification
-.\graphrag_plus\scripts\quality_gate.ps1 -Fix
-
-# Optional: include a live backend health probe
-.\graphrag_plus\scripts\quality_gate.ps1 -ProbeHealth
-```
+On Windows, `.\graphrag_plus\scripts\quality_gate.ps1` runs the same checks
+plus a frontend build. `-Fix` applies safe autofixes first, and `-ProbeHealth`
+also checks a running backend.
 
 ---
 
 ## Future improvements
 
-- **Persistent contradiction map** (currently in-process) → `data/contradictions.json` for CLI workflows
-- **FAISS-backed retrieval** for >10k chunks (already in `[embeddings]` extra)
-- **Neo4j-backed graph store** behind the existing `GraphStore` interface (`[extras]` already pins `neo4j>=5.20`)
-- **Async ingest/query** to unblock the FastAPI event loop
-- **Auth middleware** (API key / JWT) for non-`/health|/metrics` endpoints
-- **Calibration backfill job** with rolling-window compaction
-- **Graph drift alerting** (`graphrag_stale_answers_total` Prometheus counter)
-- **Hypothesis-driven fuzz tests** for `validate_url`
+- **Personalized PageRank on the in-process graph**, so the cloud demo gets the same multi-hop graph signal as a Neo4j deployment
+- **Async ingest** with progress streaming for large documents
+- **Auth** (API key / JWT) for write endpoints beyond the current rate limits
+- **Calibration backfill** with rolling-window compaction
+- **Graph drift alerting** (`graphrag_stale_answers_total`)
 
 ---
 
 ## License
 
-[MIT](LICENSE) — free to use, modify, and distribute.
+[MIT](LICENSE): free to use, modify, and distribute.
 
 ---
 
 ## Acknowledgements
 
-Built as a research-oriented exploration of how to make RAG systems
-*honest*: about what they retrieved, how confident they are, when their
-sources disagree, and when their stored answers go stale.
+Built as an exploration of how to make RAG systems *honest*: about what they
+retrieved, how confident they are, when their sources disagree, and when the
+documents simply don't contain the answer.
