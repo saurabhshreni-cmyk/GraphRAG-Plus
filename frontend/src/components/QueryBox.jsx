@@ -24,7 +24,7 @@ export default function QueryBox({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.1, duration: 0.45 }}
-      className="glass relative overflow-hidden rounded-2xl p-5"
+      className="glass relative overflow-clip rounded-2xl p-5"
     >
       {/* Subtle gradient accent in the corner */}
       <div className="pointer-events-none absolute -right-24 -top-24 h-48 w-48 rounded-full bg-accent-500/10 blur-3xl" />
