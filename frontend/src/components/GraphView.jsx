@@ -50,6 +50,8 @@ const LEGEND = [
 // concepts) read as the visual anchors of the graph.
 const MIN_NODE_RADIUS = 4;
 const MAX_NODE_RADIUS = 14;
+// At or below this many nodes every node gets a label.
+const SMALL_GRAPH_NODES = 25;
 function radiusForDegree(degree, maxDegree) {
   if (!maxDegree || maxDegree <= 0) return MIN_NODE_RADIUS;
   const t = Math.min(1, Math.sqrt(degree / maxDegree));
@@ -66,6 +68,11 @@ export default function GraphView({
 }) {
   const fgRef = useRef(null);
   const containerRef = useRef(null);
+  // Fit the camera once per loaded graph. The force layout settles after the
+  // first render, so without this small graphs opened zoomed in, with nodes
+  // cut off at the panel edges. Only once: refitting on every settle would
+  // fight the user's own zoom/pan and node drags.
+  const fittedRef = useRef(false);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -83,7 +90,9 @@ export default function GraphView({
       degree: n.degree || 0,
       raw: n,
     }));
-    const types = [...new Set(nodes.map((n) => String(n.type).toUpperCase()))].sort();
+    const types = [
+      ...new Set(nodes.map((n) => String(n.type).toUpperCase())),
+    ].sort();
     if (typeFilter.size > 0) {
       nodes = nodes.filter((n) => typeFilter.has(String(n.type).toUpperCase()));
     }
@@ -146,6 +155,7 @@ export default function GraphView({
 
   // Tune force layout for spacing and stability once nodes load.
   useEffect(() => {
+    fittedRef.current = false;
     const fg = fgRef.current;
     if (!fg) return;
     // Stronger repulsion + longer link distance keeps clusters separated.
@@ -178,6 +188,15 @@ export default function GraphView({
     return () => ro.disconnect();
   }, []);
 
+  // The layout often settles before the panel reaches its final size (phones,
+  // window resizes), leaving the graph fitted to the wrong box. Refit when
+  // the size changes after the first fit.
+  useEffect(() => {
+    if (!fittedRef.current) return undefined;
+    const timer = setTimeout(() => fgRef.current?.zoomToFit?.(400, 48), 150);
+    return () => clearTimeout(timer);
+  }, [size.w, size.h]);
+
   const highlightSet = useMemo(() => new Set(highlights || []), [highlights]);
 
   // When a node is hovered, also highlight its neighbors.
@@ -201,18 +220,18 @@ export default function GraphView({
       transition={{ delay: 0.2, duration: 0.5 }}
       className="glass relative flex h-[520px] flex-col overflow-hidden rounded-2xl"
     >
-      <header className="flex items-center justify-between gap-3 border-b border-white/5 px-5 py-3 [html:not(.dark)_&]:border-ink-200">
-        <div>
-          <h2 className="text-sm font-semibold tracking-tight">
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-white/5 px-5 py-3 [html:not(.dark)_&]:border-ink-200">
+        <div className="min-w-0">
+          <h2 className="whitespace-nowrap text-sm font-semibold tracking-tight">
             Knowledge graph
           </h2>
           <p className="text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500">
-            Total Nodes: {data.nodes.length} · Relationships: {data.links.length} ·
-            Entity Types: {data.types.length} ·{" "}
-            {mode === "important" ? "top by degree" : "full graph"}
+            {data.nodes.length} nodes · {data.links.length} relationships ·{" "}
+            {data.types.length} entity types ·{" "}
+            {mode === "important" ? "most connected" : "full graph"}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           <ModeToggle mode={mode} onChange={onModeChange} />
           <button
             type="button"
@@ -225,7 +244,6 @@ export default function GraphView({
           >
             Fit
           </button>
-          <Legend />
         </div>
       </header>
 
@@ -282,6 +300,11 @@ export default function GraphView({
       </div>
 
       <div ref={containerRef} className="relative flex-1">
+        {data.nodes.length > 0 && (
+          <div className="pointer-events-none absolute bottom-3 left-4 z-10 max-w-[calc(100%-2rem)]">
+            <Legend />
+          </div>
+        )}
         {data.nodes.length === 0 ? (
           <EmptyState />
         ) : (
@@ -292,6 +315,11 @@ export default function GraphView({
             height={size.h}
             backgroundColor="rgba(0,0,0,0)"
             cooldownTicks={140}
+            onEngineStop={() => {
+              if (fittedRef.current) return;
+              fittedRef.current = true;
+              fgRef.current?.zoomToFit?.(400, 48);
+            }}
             nodeRelSize={5}
             // Smoother zoom & pan
             enablePointerInteraction
@@ -299,13 +327,15 @@ export default function GraphView({
             enablePanInteraction
             minZoom={0.3}
             maxZoom={6}
-            linkColor={(link) => EDGE_PALETTE[link.type] || EDGE_PALETTE.default}
+            linkColor={(link) =>
+              EDGE_PALETTE[link.type] || EDGE_PALETTE.default
+            }
             linkWidth={(link) => {
               const sId = link.source.id ?? link.source;
               const tId = link.target.id ?? link.target;
               const lit = isHighlighted(sId) || isHighlighted(tId);
               const inHood = isInHoverHood(sId) && isInHoverHood(tId);
-              return lit ? 2.4 : inHood ? 1.6 : 0.5;
+              return lit ? 2.4 : inHood ? 1.6 : 1;
             }}
             linkDirectionalParticles={(link) => {
               const sId = link.source.id ?? link.source;
@@ -368,11 +398,15 @@ export default function GraphView({
               // Soft halo for prominent / highlighted / selected nodes; the
               // query-path highlight pulses (time-driven alpha).
               if (isHi || isHover || isSel) {
-                const pulse = isHi
-                  ? 0.5 + 0.5 * Math.sin(Date.now() / 300)
-                  : 1;
+                const pulse = isHi ? 0.5 + 0.5 * Math.sin(Date.now() / 300) : 1;
                 ctx.beginPath();
-                ctx.arc(node.x, node.y, r + 4 + (isHi ? pulse * 4 : 2), 0, 2 * Math.PI);
+                ctx.arc(
+                  node.x,
+                  node.y,
+                  r + 4 + (isHi ? pulse * 4 : 2),
+                  0,
+                  2 * Math.PI,
+                );
                 ctx.fillStyle = isHi
                   ? `rgba(239,68,68,${0.12 + pulse * 0.18})`
                   : `${color}22`;
@@ -382,7 +416,8 @@ export default function GraphView({
               ctx.beginPath();
               ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
               ctx.fillStyle = color;
-              ctx.shadowColor = isHi || isHover || isSel ? color : "transparent";
+              ctx.shadowColor =
+                isHi || isHover || isSel ? color : "transparent";
               ctx.shadowBlur = isHi ? 18 : isHover || isSel ? 12 : 0;
               ctx.fill();
               ctx.shadowBlur = 0;
@@ -398,22 +433,28 @@ export default function GraphView({
               // selected, in hover-neighborhood, or "important" by degree
               // (top tier by node radius). Cuts label clutter at low zoom.
               const isImportant = baseR >= MIN_NODE_RADIUS + 4;
+              // Small graphs (like the demo) have room to label every node.
+              const isSmallGraph = data.nodes.length <= SMALL_GRAPH_NODES;
               const showLabel =
                 isHi ||
                 isHover ||
                 isSel ||
                 inHood ||
                 isImportant ||
+                isSmallGraph ||
                 globalScale > 1.6;
               if (showLabel) {
                 const label = (node.label || node.id).slice(0, 28);
-                ctx.font = `${
-                  isHi || isHover || isSel ? 11 : 10
-                }px InterVariable, sans-serif`;
+                // Divide by the zoom so labels keep the same on-screen size
+                // (like edge labels): fixed canvas units made them huge when
+                // zoomed in and unreadable once the graph was fitted.
+                const fontPx =
+                  (isHi || isHover || isSel ? 12 : 11) / globalScale;
+                ctx.font = `${fontPx}px InterVariable, sans-serif`;
                 ctx.fillStyle = labelColor;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "top";
-                ctx.fillText(label, node.x, node.y + r + 2);
+                ctx.fillText(label, node.x, node.y + r + 2 / globalScale);
               }
             }}
             nodePointerAreaPaint={(node, color, ctx) => {
@@ -496,9 +537,8 @@ export default function GraphView({
               {selected.id}
             </div>
             <div className="mt-2 text-[11px] text-ink-400 [html:not(.dark)_&]:text-ink-500">
-              degree:{" "}
-              <span className="font-mono">{selected.degree || 0}</span> ·
-              connections:{" "}
+              degree: <span className="font-mono">{selected.degree || 0}</span>{" "}
+              · connections:{" "}
               <span className="font-mono">
                 {adjacency.get(selected.id)?.size ?? 0}
               </span>
@@ -517,7 +557,10 @@ export default function GraphView({
                 </div>
                 <ul className="thin-scroll mt-1 max-h-24 space-y-0.5 overflow-auto text-[11px]">
                   {entityDetails.neighbors.slice(0, 8).map((n, i) => (
-                    <li key={`${n.name}-${i}`} className="flex items-center gap-1.5">
+                    <li
+                      key={`${n.name}-${i}`}
+                      className="flex items-center gap-1.5"
+                    >
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ background: colorForType(n.type) }}
@@ -550,8 +593,10 @@ function ModeToggle({ mode, onChange }) {
     { id: "full", label: "Full" },
   ];
   return (
-    <div className="flex items-center gap-1 rounded-md border border-white/5 bg-white/[0.02] p-0.5
-                    [html:not(.dark)_&]:border-ink-200">
+    <div
+      className="flex items-center gap-1 rounded-md border border-white/5 bg-white/[0.02] p-0.5
+                    [html:not(.dark)_&]:border-ink-200"
+    >
       {opts.map((o) => {
         const active = mode === o.id;
         return (
@@ -580,7 +625,7 @@ function ModeToggle({ mode, onChange }) {
 
 function Legend() {
   return (
-    <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-ink-400">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-ink-950/60 px-2 py-1 text-[10px] uppercase tracking-wider text-ink-400 backdrop-blur-sm [html:not(.dark)_&]:bg-white/80 [html:not(.dark)_&]:text-ink-500">
       {LEGEND.map(([label, color]) => (
         <span key={label} className="flex items-center gap-1.5">
           <span

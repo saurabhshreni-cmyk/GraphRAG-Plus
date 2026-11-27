@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
-import { api } from "../api.js";
+import { api, IS_LOCAL_API } from "../api.js";
 import Spinner from "./Spinner.jsx";
 
 // Convert pasted text into a temp file path on the server is non-trivial,
@@ -27,7 +27,11 @@ const ACCEPTED_TYPES = ".pdf,.txt,.md,.docx,.html,.htm";
 // way to give a clear message instead of an opaque network error.
 const MAX_UPLOAD_BYTES = 4_000_000;
 
-export default function IngestPanel({ onIngested, snapshot }) {
+export default function IngestPanel({
+  onIngested,
+  activeCorpus,
+  relationCount,
+}) {
   const [filePathsRaw, setFilePathsRaw] = useState("");
   const [urlsRaw, setUrlsRaw] = useState("");
   const [corpusName, setCorpusName] = useState("");
@@ -73,7 +77,8 @@ export default function IngestPanel({ onIngested, snapshot }) {
     try {
       const result = await api.ingestFile({
         file: pendingFile,
-        corpusName: corpusName.trim() || pendingFile.name.replace(/\.[^.]+$/, ""),
+        corpusName:
+          corpusName.trim() || pendingFile.name.replace(/\.[^.]+$/, ""),
       });
       setUploadStage(UPLOAD_STAGES.length - 1);
       setUploadResult(result);
@@ -92,28 +97,15 @@ export default function IngestPanel({ onIngested, snapshot }) {
     }
   };
 
-  // Derive cumulative graph counts from the live snapshot so this panel
-  // reflects the *current* knowledge graph, not the size of the last
-  // ingest batch (which was the source of confusing entity counts before).
-  const graphStats = (() => {
-    const nodes = snapshot?.nodes ?? [];
-    const edges = snapshot?.edges ?? [];
-    const byType = nodes.reduce((acc, node) => {
-      const t = node.node_type || "Other";
-      acc[t] = (acc[t] || 0) + 1;
-      return acc;
-    }, {});
-    const documents = byType.Document || 0;
-    const chunks = byType.Chunk || 0;
-    // Everything that isn't Document / Chunk counts as an entity-like node.
-    const entities = Object.entries(byType)
-      .filter(([t]) => t !== "Document" && t !== "Chunk")
-      .reduce((sum, [, count]) => sum + count, 0);
-    const relations = edges.filter(
-      (e) => !["contains", "mentions"].includes(e.edge_type),
-    ).length;
-    return { documents, chunks, entities, relations };
-  })();
+  // Counts for the corpus the user is looking at. They come from the corpus
+  // metadata, not the graph snapshot: the snapshot is capped to the top nodes
+  // and has no Document/Chunk nodes, so it showed "0 docs · 0 chunks".
+  const corpusStats = {
+    documents: activeCorpus?.document_count ?? 0,
+    chunks: activeCorpus?.chunk_count ?? 0,
+    entities: activeCorpus?.entity_count ?? 0,
+    relations: relationCount ?? 0,
+  };
 
   const submit = async () => {
     const filePaths = filePathsRaw
@@ -125,7 +117,11 @@ export default function IngestPanel({ onIngested, snapshot }) {
       .map((s) => s.trim())
       .filter(Boolean);
     if (!filePaths.length && !urls.length) {
-      toast.error("Provide at least one file path or URL");
+      toast.error(
+        IS_LOCAL_API
+          ? "Provide at least one file path or URL"
+          : "Add at least one URL",
+      );
       return;
     }
     setBusy(true);
@@ -158,7 +154,9 @@ export default function IngestPanel({ onIngested, snapshot }) {
         <div>
           <h2 className="text-sm font-semibold tracking-tight">Ingest</h2>
           <p className="text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500">
-            Files (local paths visible to backend) or URLs.
+            {IS_LOCAL_API
+              ? "Upload a file, add web pages, or point at files on this machine."
+              : "Upload a document or add web page URLs."}
           </p>
         </div>
         <span className="rounded-full border border-white/5 bg-white/[0.02] px-2 py-0.5 text-[10px] uppercase tracking-wider text-ink-400">
@@ -199,7 +197,9 @@ export default function IngestPanel({ onIngested, snapshot }) {
         <p className="text-xs text-ink-300 [html:not(.dark)_&]:text-ink-600">
           Drop a file or click to browse
         </p>
-        <p className="text-[10px] text-ink-500">PDF · TXT · MD · DOCX · HTML</p>
+        <p className="text-[10px] text-ink-500">
+          PDF · TXT · MD · DOCX · HTML · up to {MAX_UPLOAD_BYTES / 1_000_000} MB
+        </p>
         {pendingFile && (
           <p className="mt-1 rounded-md bg-accent-500/10 px-2 py-0.5 font-mono text-[11px] text-accent-300 [html:not(.dark)_&]:text-accent-700">
             {pendingFile.name} · {(pendingFile.size / 1024).toFixed(1)} KB
@@ -243,29 +243,35 @@ export default function IngestPanel({ onIngested, snapshot }) {
       )}
       {uploadResult && (
         <p className="mb-3 text-[11px] text-emerald-300 [html:not(.dark)_&]:text-emerald-700">
-          ✓ {uploadResult.entities} entities · {uploadResult.relations} relations ·{" "}
-          {uploadResult.chunks} chunks
+          ✓ {uploadResult.entities} entities · {uploadResult.relations}{" "}
+          relations · {uploadResult.chunks} chunks
         </p>
       )}
 
-      <label className="mb-2 block text-xs font-medium text-ink-300 [html:not(.dark)_&]:text-ink-600">
-        File paths
-      </label>
-      <textarea
-        ref={dropRef}
-        value={filePathsRaw}
-        onChange={(e) => setFilePathsRaw(e.target.value)}
-        rows={3}
-        placeholder={"C:/path/to/notes.txt\nC:/path/to/paper.pdf"}
-        className="thin-scroll w-full resize-y rounded-lg border border-white/5 bg-ink-900/40 px-3 py-2
+      {IS_LOCAL_API && (
+        <>
+          <label className="mb-2 block text-xs font-medium text-ink-300 [html:not(.dark)_&]:text-ink-600">
+            File paths <span className="text-ink-500">(on this machine)</span>
+          </label>
+          <textarea
+            ref={dropRef}
+            value={filePathsRaw}
+            onChange={(e) => setFilePathsRaw(e.target.value)}
+            rows={3}
+            placeholder={"C:/path/to/notes.txt\nC:/path/to/paper.pdf"}
+            className="thin-scroll w-full resize-y rounded-lg border border-white/5 bg-ink-900/40 px-3 py-2
                    font-mono text-xs text-ink-100 placeholder:text-ink-500
                    focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30
                    [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-white
                    [html:not(.dark)_&]:text-ink-900 [html:not(.dark)_&]:placeholder:text-ink-400"
-      />
+          />
+        </>
+      )}
 
-      <label className="mt-3 mb-2 block text-xs font-medium text-ink-300 [html:not(.dark)_&]:text-ink-600">
-        URLs
+      <label
+        className={`${IS_LOCAL_API ? "mt-3" : ""} mb-2 block text-xs font-medium text-ink-300 [html:not(.dark)_&]:text-ink-600`}
+      >
+        Web page URLs <span className="text-ink-500">(one per line)</span>
       </label>
       <textarea
         value={urlsRaw}
@@ -304,25 +310,33 @@ export default function IngestPanel({ onIngested, snapshot }) {
                      disabled:cursor-not-allowed disabled:opacity-60"
         >
           {busy ? <Spinner /> : <PlusIcon />}
-          Ingest
+          {IS_LOCAL_API ? "Ingest" : "Ingest URLs"}
         </button>
       </div>
 
       <div className="mt-4 border-t border-white/5 pt-3 [html:not(.dark)_&]:border-ink-200">
-        <div className="mb-1.5 text-[10px] uppercase tracking-wider text-ink-500">
-          Graph total
+        <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-ink-500">
+          <span>Active corpus</span>
+          {activeCorpus?.name && (
+            <span
+              className="truncate normal-case tracking-normal text-ink-400"
+              title={activeCorpus.name}
+            >
+              {activeCorpus.name}
+            </span>
+          )}
         </div>
         <motion.div
           layout
-          key={`${graphStats.documents}-${graphStats.entities}-${graphStats.relations}`}
+          key={`${corpusStats.documents}-${corpusStats.entities}-${corpusStats.relations}`}
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex flex-wrap items-center gap-2 text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500"
         >
-          <Stat label="docs" value={graphStats.documents} />
-          <Stat label="chunks" value={graphStats.chunks} />
-          <Stat label="entities" value={graphStats.entities} />
-          <Stat label="relations" value={graphStats.relations} />
+          <Stat label="docs" value={corpusStats.documents} />
+          <Stat label="chunks" value={corpusStats.chunks} />
+          <Stat label="entities" value={corpusStats.entities} />
+          <Stat label="relations" value={corpusStats.relations} />
         </motion.div>
       </div>
     </motion.section>
@@ -331,9 +345,12 @@ export default function IngestPanel({ onIngested, snapshot }) {
 
 function Stat({ label, value }) {
   return (
-    <span className="rounded-md border border-white/5 bg-white/[0.02] px-2 py-0.5 font-mono text-[11px]">
-      <span className="text-accent-400">{value}</span>{" "}
-      <span className="text-ink-500">{label}</span>
+    <span
+      className="rounded-md border border-white/5 bg-white/[0.02] px-2 py-0.5 font-mono text-[11px]
+                 [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:bg-ink-50"
+    >
+      <span className="text-accent-400 [html:not(.dark)_&]:text-accent-700">{value}</span>{" "}
+      <span className="text-ink-500 [html:not(.dark)_&]:text-ink-600">{label}</span>
     </span>
   );
 }

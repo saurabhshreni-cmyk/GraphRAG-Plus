@@ -27,10 +27,13 @@ used locally, and so a persisted FAISS index stays loadable across providers.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from typing import Any
 
 from graphrag_plus.app.utils.http_utils import env_secret, json_headers
@@ -224,15 +227,32 @@ class RemoteEmbedder:
 
     Mirrors the local embedder's contract exactly: ``available()``,
     ``dimension``, ``embed_text``, ``embed_query`` and ``embed_batch``, with
-    every failure degrading to ``[]`` instead of raising. One failed call
-    disables the provider for the process so a dead key or an exhausted quota
-    costs one timeout rather than one per query.
+    every failure degrading to ``[]`` instead of raising.
+
+    Free-tier friendly:
+
+    * A failed call pauses the provider instead of retrying on every request.
+      A rejected key (HTTP 400/401/403) pauses it for the life of the process;
+      anything transient (429 rate limit, 5xx, timeout) only for
+      ``_COOLDOWN_S``, so one burst can't switch semantic search off for hours.
+    * Query embeddings are cached (LRU), so a repeated question, such as a
+      clicked example, costs no API call.
     """
 
-    def __init__(self, provider: Any) -> None:
+    _COOLDOWN_S = 60.0
+    _QUERY_CACHE_SIZE = 256
+
+    def __init__(self, provider: Any, clock: Any = time.monotonic) -> None:
         self._provider = provider
-        self._disabled = False
+        self._clock = clock
+        # Monotonic time until which the provider is paused; inf = for good.
+        self._paused_until = 0.0
         self._lock = threading.Lock()
+        self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
+
+    @property
+    def _disabled(self) -> bool:
+        return self._clock() < self._paused_until
 
     # ------------------------------------------------------------------ status
     @property
@@ -248,15 +268,20 @@ class RemoteEmbedder:
         return 0 if self._disabled else int(self._provider.dimension)
 
     def _disable(self, exc: Exception) -> None:
+        status = getattr(exc, "code", None)
+        permanent = status in (400, 401, 403)
         with self._lock:
-            if not self._disabled:
-                self._disabled = True
-                logger.warning(
-                    "remote_embedder.disabled provider=%s error=%s - "
-                    "semantic retrieval falls back to BM25 + TF-IDF",
-                    self.model_name,
-                    str(exc)[:200],
-                )
+            if self._disabled:
+                return
+            self._paused_until = math.inf if permanent else self._clock() + self._COOLDOWN_S
+        logger.warning(
+            "remote_embedder.paused provider=%s for=%s status=%s error=%s - "
+            "semantic retrieval falls back to BM25 + TF-IDF meanwhile",
+            self.model_name,
+            "process" if permanent else f"{self._COOLDOWN_S:.0f}s",
+            status,
+            str(exc)[:200],
+        )
 
     # ----------------------------------------------------------------- embedding
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -275,8 +300,19 @@ class RemoteEmbedder:
         passage asymmetry is handled by the API rather than by prepending an
         instruction string the way BGE models require.
         """
+        with self._lock:
+            cached = self._query_cache.get(text)
+            if cached is not None:
+                self._query_cache.move_to_end(text)
+                return cached
         vectors = self._embed([text], is_query=True)
-        return vectors[0] if vectors else []
+        if not vectors:
+            return []
+        with self._lock:
+            self._query_cache[text] = vectors[0]
+            while len(self._query_cache) > self._QUERY_CACHE_SIZE:
+                self._query_cache.popitem(last=False)
+        return vectors[0]
 
     def _embed(self, texts: list[str], *, is_query: bool) -> list[list[float]]:
         if not texts or self._disabled:

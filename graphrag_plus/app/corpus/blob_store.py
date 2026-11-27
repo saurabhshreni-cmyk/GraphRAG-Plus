@@ -17,7 +17,7 @@ store on access and flushes them back after a mutating ingest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 from graphrag_plus.app.utils.logging_utils import get_logger
@@ -36,6 +36,11 @@ class CorpusBlobs:
     meta: dict[str, Any]
     graph: dict[str, Any]
     chunks: list[Any]
+    # The corpus's FAISS index as saved on disk ({"meta": ..., "index_b64": ...}).
+    # Optional: None until a first embedding pass has run. Persisting it means
+    # a fresh serverless instance reuses the vectors instead of re-embedding
+    # every chunk through the (rate-limited, free-tier) embedding API.
+    vectors: dict[str, Any] | None = None
 
 
 @runtime_checkable
@@ -60,6 +65,10 @@ class BlobStore(Protocol):
 
     def exists(self, corpus_id: str) -> bool:
         """True if the corpus is present."""
+        ...
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        """Attach a FAISS index to an existing corpus. A no-op if it doesn't exist."""
         ...
 
 
@@ -89,6 +98,11 @@ class InMemoryBlobStore:
 
     def exists(self, corpus_id: str) -> bool:
         return corpus_id in self._data
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        blobs = self._data.get(corpus_id)
+        if blobs is not None:
+            self._data[corpus_id] = replace(blobs, vectors=vectors)
 
 
 class PostgresBlobStore:
@@ -126,6 +140,8 @@ class PostgresBlobStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """)
+            # Added after the first release; IF NOT EXISTS migrates old tables.
+            cur.execute(f"ALTER TABLE {self._TABLE} ADD COLUMN IF NOT EXISTS vectors JSONB")
             conn.commit()
 
     # ------------------------------------------------------------------- ops
@@ -137,13 +153,13 @@ class PostgresBlobStore:
     def load(self, corpus_id: str) -> CorpusBlobs | None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT meta, graph, chunks FROM {self._TABLE} WHERE corpus_id = %s",
+                f"SELECT meta, graph, chunks, vectors FROM {self._TABLE} WHERE corpus_id = %s",
                 (corpus_id,),
             )
             row = cur.fetchone()
         if row is None:
             return None
-        return CorpusBlobs(meta=row[0], graph=row[1], chunks=row[2])
+        return CorpusBlobs(meta=row[0], graph=row[1], chunks=row[2], vectors=row[3])
 
     def save(self, blobs: CorpusBlobs) -> None:
         from psycopg.types.json import Jsonb
@@ -152,15 +168,24 @@ class PostgresBlobStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
-                INSERT INTO {self._TABLE} (corpus_id, meta, graph, chunks, updated_at)
-                VALUES (%s, %s, %s, %s, now())
+                INSERT INTO {self._TABLE} (corpus_id, meta, graph, chunks, vectors, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
                 ON CONFLICT (corpus_id) DO UPDATE SET
                     meta = EXCLUDED.meta,
                     graph = EXCLUDED.graph,
                     chunks = EXCLUDED.chunks,
+                    -- Keep stored vectors when the caller has none to give;
+                    -- a stale index is detected (chunk ids / model) on load.
+                    vectors = COALESCE(EXCLUDED.vectors, {self._TABLE}.vectors),
                     updated_at = now()
                 """,
-                (corpus_id, Jsonb(blobs.meta), Jsonb(blobs.graph), Jsonb(blobs.chunks)),
+                (
+                    corpus_id,
+                    Jsonb(blobs.meta),
+                    Jsonb(blobs.graph),
+                    Jsonb(blobs.chunks),
+                    Jsonb(blobs.vectors) if blobs.vectors is not None else None,
+                ),
             )
             conn.commit()
 
@@ -173,6 +198,16 @@ class PostgresBlobStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT 1 FROM {self._TABLE} WHERE corpus_id = %s", (corpus_id,))
             return cur.fetchone() is not None
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {self._TABLE} SET vectors = %s WHERE corpus_id = %s",
+                (Jsonb(vectors), corpus_id),
+            )
+            conn.commit()
 
 
 def make_blob_store(database_url: str) -> BlobStore | None:

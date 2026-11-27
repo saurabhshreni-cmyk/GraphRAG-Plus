@@ -17,8 +17,8 @@ export default function Header({ healthStatus, theme, onToggleTheme }) {
                  dark:border-white/5
                  [html:not(.dark)_&]:bg-white/70 [html:not(.dark)_&]:border-ink-200"
     >
-      <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-4">
-        <div className="flex items-center gap-3">
+      <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex min-w-0 items-center gap-3">
           <motion.div
             initial={{ rotate: -8, scale: 0.9 }}
             animate={{ rotate: 0, scale: 1 }}
@@ -28,26 +28,30 @@ export default function Header({ healthStatus, theme, onToggleTheme }) {
           </motion.div>
           <div className="leading-tight">
             <h1 className="text-base font-semibold tracking-tight">
-              <span className="bg-gradient-to-br from-ink-50 to-ink-300 bg-clip-text text-transparent
-                               [html:not(.dark)_&]:from-ink-900 [html:not(.dark)_&]:to-ink-600">
+              <span
+                className="bg-gradient-to-br from-ink-50 to-ink-300 bg-clip-text text-transparent
+                               [html:not(.dark)_&]:from-ink-900 [html:not(.dark)_&]:to-ink-600"
+              >
                 GraphRAG
               </span>
               <span className="bg-gradient-to-br from-accent-400 to-accent-600 bg-clip-text text-transparent">
                 ++
               </span>
             </h1>
-            <p className="text-xs text-ink-400 [html:not(.dark)_&]:text-ink-500">
+            <p className="hidden text-xs text-ink-400 sm:block [html:not(.dark)_&]:text-ink-500">
               Trust-aware Graph Retrieval Augmented Generation
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span
-            className="flex items-center gap-2 rounded-full border border-white/5 px-3 py-1.5
+            className="flex items-center gap-2 whitespace-nowrap rounded-full border border-white/5 px-3 py-1.5
                        text-xs text-ink-300 [html:not(.dark)_&]:border-ink-200 [html:not(.dark)_&]:text-ink-600"
             title={`API health: ${healthStatus}`}
           >
-            <span className={`h-2 w-2 rounded-full animate-pulse-soft ${dotClass}`} />
+            <span
+              className={`h-2 w-2 rounded-full animate-pulse-soft ${dotClass}`}
+            />
             {healthStatus === "ok"
               ? "Backend online"
               : healthStatus === "checking"
@@ -65,7 +69,14 @@ function LogoMark() {
   return (
     <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden>
       <defs>
-        <linearGradient id="lg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id="lg"
+          x1="0"
+          y1="0"
+          x2="32"
+          y2="32"
+          gradientUnits="userSpaceOnUse"
+        >
           <stop offset="0" stopColor="#7aa7ff" />
           <stop offset="1" stopColor="#3358c8" />
         </linearGradient>
