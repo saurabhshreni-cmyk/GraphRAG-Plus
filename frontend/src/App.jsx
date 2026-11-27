@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import Header from "./components/Header.jsx";
 import IngestPanel from "./components/IngestPanel.jsx";
@@ -6,8 +6,11 @@ import QueryBox from "./components/QueryBox.jsx";
 import ResultCard from "./components/ResultCard.jsx";
 import GraphView from "./components/GraphView.jsx";
 import CorpusSelector from "./components/CorpusSelector.jsx";
-import ReasoningStory, { buildStorySteps } from "./components/ReasoningStory.jsx";
+import ReasoningStory, {
+  buildStorySteps,
+} from "./components/ReasoningStory.jsx";
 import { api } from "./api.js";
+import { buildSuggestions } from "./suggestions.js";
 
 const THEME_KEY = "graphrag.theme";
 const LLM_MODE_KEY = "graphrag.llmMode"; // "auto" | "llm" | "extractive"
@@ -36,6 +39,9 @@ export default function App() {
   // creates a new isolated corpus; queries operate on the active one.
   const [corpora, setCorpora] = useState([]);
   const [activeCorpusId, setActiveCorpusId] = useState(null);
+  // Total typed relations in the active corpus (the graph snapshot is capped
+  // to the top nodes, so it undercounts).
+  const [relationCount, setRelationCount] = useState(0);
 
   // Apply theme to <html> and persist.
   useEffect(() => {
@@ -73,7 +79,8 @@ export default function App() {
       // shows "(none)" and queries target a ghost corpus. Pick the most
       // recent corpus backed by real data so we never default to empty.
       setActiveCorpusId((current) => {
-        const stillPresent = current && list.some((c) => c.corpus_id === current);
+        const stillPresent =
+          current && list.some((c) => c.corpus_id === current);
         if (stillPresent) return current;
         if (list.length === 0) return null;
         const meaningful = list.find((c) => c.entity_count > 0) || list[0];
@@ -84,18 +91,15 @@ export default function App() {
     }
   }, []);
 
-  const handleSelectCorpus = useCallback(
-    async (corpusId) => {
-      try {
-        await api.selectCorpus(corpusId);
-        setActiveCorpusId(corpusId);
-        toast.success("Corpus switched");
-      } catch (err) {
-        toast.error(`Could not switch corpus: ${err.message}`);
-      }
-    },
-    [],
-  );
+  const handleSelectCorpus = useCallback(async (corpusId) => {
+    try {
+      await api.selectCorpus(corpusId);
+      setActiveCorpusId(corpusId);
+      toast.success("Corpus switched");
+    } catch (err) {
+      toast.error(`Could not switch corpus: ${err.message}`);
+    }
+  }, []);
 
   const handleDeleteCorpus = useCallback(
     async (corpusId) => {
@@ -144,6 +148,39 @@ export default function App() {
     if (activeCorpusId) refreshGraph();
   }, [activeCorpusId, refreshGraph]);
 
+  const activeCorpus = useMemo(
+    () => corpora.find((c) => c.corpus_id === activeCorpusId) || null,
+    [corpora, activeCorpusId],
+  );
+  // Refetch the relation total only when the corpus or its contents change,
+  // not on every corpora-list refresh.
+  const corpusEntityCount = activeCorpus?.entity_count;
+  const corpusChunkCount = activeCorpus?.chunk_count;
+
+  useEffect(() => {
+    // Clear first so a switched-to corpus never shows the previous total.
+    setRelationCount(0);
+    if (!activeCorpusId) return undefined;
+    let cancelled = false;
+    api
+      .graphStats(activeCorpusId)
+      .then((stats) => {
+        if (cancelled) return;
+        const byType = stats?.relationships_by_type || {};
+        setRelationCount(
+          Object.values(byType).reduce((sum, n) => sum + Number(n || 0), 0),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCorpusId, corpusEntityCount, corpusChunkCount]);
+  const suggestions = useMemo(
+    () => buildSuggestions(activeCorpus, snapshot),
+    [activeCorpus, snapshot],
+  );
+
   const handleIngested = useCallback(
     (response) => {
       // Each ingest creates a new isolated corpus by default. Switch to it.
@@ -158,8 +195,14 @@ export default function App() {
 
   const [queryPathHighlights, setQueryPathHighlights] = useState([]);
 
+  // Synchronous in-flight guard: `busy` state lags a render, so a fast
+  // double-click on an example question could otherwise send two queries.
+  const askingRef = useRef(false);
+
   const handleAsk = useCallback(
     async (question) => {
+      if (askingRef.current) return;
+      askingRef.current = true;
       setBusy(true);
       setResult(null);
       setEvidenceHighlights([]);
@@ -171,8 +214,13 @@ export default function App() {
         api
           .queryPath(activeCorpusId, question)
           .then((p) => {
-            const names = [...(p.seed_nodes || []), ...(p.neighbor_nodes || [])];
-            setQueryPathHighlights(names.map((n) => `ent::${String(n).toLowerCase()}`));
+            const names = [
+              ...(p.seed_nodes || []),
+              ...(p.neighbor_nodes || []),
+            ];
+            setQueryPathHighlights(
+              names.map((n) => `ent::${String(n).toLowerCase()}`),
+            );
           })
           .catch(() => {});
       }
@@ -196,13 +244,17 @@ export default function App() {
       } catch (err) {
         toast.error(err.message || "Query failed");
       } finally {
+        askingRef.current = false;
         setBusy(false);
       }
     },
     [llmMode, activeCorpusId, refreshCorpora],
   );
 
-  const steps = useMemo(() => buildStorySteps(result, snapshot), [result, snapshot]);
+  const steps = useMemo(
+    () => buildStorySteps(result, snapshot),
+    [result, snapshot],
+  );
 
   // Combined highlights: evidence-hover > reasoning-story > query-path trace.
   const activeHighlights =
@@ -220,9 +272,9 @@ export default function App() {
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
       />
 
-      <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 pt-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] uppercase tracking-wider text-ink-400 [html:not(.dark)_&]:text-ink-500">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="hidden text-[10px] uppercase tracking-wider text-ink-400 sm:inline [html:not(.dark)_&]:text-ink-500">
             Active workspace
           </span>
           <CorpusSelector
@@ -234,14 +286,19 @@ export default function App() {
           />
         </div>
         <span className="text-[10px] text-ink-500/80 [html:not(.dark)_&]:text-ink-400">
-          {corpora.length} corpus{corpora.length === 1 ? "" : "es"} · isolated
+          {corpora.length} {corpora.length === 1 ? "corpus" : "corpora"} ·
+          isolated
         </span>
       </div>
 
-      <main className="mx-auto grid max-w-[1600px] gap-5 px-4 py-6 sm:px-6 md:grid-cols-2 lg:grid-cols-12">
+      <main className="mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-4 py-6 sm:px-6 md:grid-cols-2 lg:grid-cols-12">
         {/* LEFT PANEL: ingest + reasoning story */}
-        <div className="flex flex-col gap-5 md:col-span-2 lg:col-span-3">
-          <IngestPanel onIngested={handleIngested} snapshot={snapshot} />
+        <div className="flex min-w-0 flex-col gap-5 md:col-span-2 lg:col-span-3">
+          <IngestPanel
+            onIngested={handleIngested}
+            activeCorpus={activeCorpus}
+            relationCount={relationCount}
+          />
           <ReasoningStory
             steps={steps}
             enabled={storyOn && steps.length > 0}
@@ -251,13 +308,14 @@ export default function App() {
         </div>
 
         {/* CENTER: query + graph */}
-        <div className="flex flex-col gap-5 md:col-span-2 lg:col-span-6">
+        <div className="order-first flex min-w-0 flex-col gap-5 md:col-span-2 lg:order-none lg:col-span-6">
           <QueryBox
             onAsk={handleAsk}
             busy={busy}
             llmMode={llmMode}
             onLlmModeChange={setLlmMode}
             serverLlmEnabled={serverLlmEnabled}
+            suggestions={suggestions}
           />
           <GraphView
             snapshot={snapshot}
@@ -270,7 +328,7 @@ export default function App() {
         </div>
 
         {/* RIGHT PANEL: result */}
-        <div className="md:col-span-2 lg:col-span-3">
+        <div className="min-w-0 md:col-span-2 lg:col-span-3">
           <ResultCard
             result={result}
             busy={busy}
@@ -282,8 +340,9 @@ export default function App() {
       <footer className="mx-auto max-w-[1600px] px-6 pb-8 pt-2 text-xs text-ink-500 [html:not(.dark)_&]:text-ink-400">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p>
-            GraphRAG++ · trust-aware graph retrieval, calibration &amp; contradiction
-            handling — FastAPI backend · React + Vite + Tailwind frontend.
+            GraphRAG++ · trust-aware graph retrieval, calibration &amp;
+            contradiction handling — FastAPI backend · React + Vite + Tailwind
+            frontend.
           </p>
           <p className="font-mono text-[10px] text-ink-500/80">
             server LLM: {serverLlmEnabled ? "on" : "off"} · view: {llmMode}

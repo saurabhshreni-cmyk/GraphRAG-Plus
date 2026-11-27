@@ -17,7 +17,7 @@ store on access and flushes them back after a mutating ingest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 from graphrag_plus.app.utils.logging_utils import get_logger
@@ -36,6 +36,17 @@ class CorpusBlobs:
     meta: dict[str, Any]
     graph: dict[str, Any]
     chunks: list[Any]
+    # The corpus's FAISS index as saved on disk ({"meta": ..., "index_b64": ...}).
+    # Optional: None until a first embedding pass has run. Persisting it means
+    # a fresh serverless instance reuses the vectors instead of re-embedding
+    # every chunk through the (rate-limited, free-tier) embedding API.
+    vectors: dict[str, Any] | None = None
+
+
+def vector_chunk_ids(vectors: dict[str, Any]) -> list[str]:
+    """Sorted chunk ids an exported FAISS index covers."""
+    meta = vectors.get("meta") or {}
+    return sorted(str(cid) for cid in meta.get("chunk_ids") or [])
 
 
 @runtime_checkable
@@ -60,6 +71,15 @@ class BlobStore(Protocol):
 
     def exists(self, corpus_id: str) -> bool:
         """True if the corpus is present."""
+        ...
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        """Attach a FAISS index to an existing corpus.
+
+        A no-op if the corpus doesn't exist, or if its stored chunks no longer
+        match ``vectors["meta"]["chunk_ids"]``: another instance re-ingested
+        it meanwhile, and its newer vectors must not be overwritten.
+        """
         ...
 
 
@@ -89,6 +109,15 @@ class InMemoryBlobStore:
 
     def exists(self, corpus_id: str) -> bool:
         return corpus_id in self._data
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        blobs = self._data.get(corpus_id)
+        if blobs is None:
+            return
+        stored_ids = sorted(str(c.get("chunk_id", "")) for c in blobs.chunks)
+        if stored_ids != vector_chunk_ids(vectors):
+            return
+        self._data[corpus_id] = replace(blobs, vectors=vectors)
 
 
 class PostgresBlobStore:
@@ -126,6 +155,14 @@ class PostgresBlobStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """)
+            # Added after the first release. Check first: even a no-op ALTER
+            # takes a brief exclusive lock, and this runs on every cold start.
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = 'vectors'",
+                (self._TABLE,),
+            )
+            if cur.fetchone() is None:
+                cur.execute(f"ALTER TABLE {self._TABLE} ADD COLUMN IF NOT EXISTS vectors JSONB")
             conn.commit()
 
     # ------------------------------------------------------------------- ops
@@ -137,13 +174,13 @@ class PostgresBlobStore:
     def load(self, corpus_id: str) -> CorpusBlobs | None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT meta, graph, chunks FROM {self._TABLE} WHERE corpus_id = %s",
+                f"SELECT meta, graph, chunks, vectors FROM {self._TABLE} WHERE corpus_id = %s",
                 (corpus_id,),
             )
             row = cur.fetchone()
         if row is None:
             return None
-        return CorpusBlobs(meta=row[0], graph=row[1], chunks=row[2])
+        return CorpusBlobs(meta=row[0], graph=row[1], chunks=row[2], vectors=row[3])
 
     def save(self, blobs: CorpusBlobs) -> None:
         from psycopg.types.json import Jsonb
@@ -152,15 +189,24 @@ class PostgresBlobStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
-                INSERT INTO {self._TABLE} (corpus_id, meta, graph, chunks, updated_at)
-                VALUES (%s, %s, %s, %s, now())
+                INSERT INTO {self._TABLE} (corpus_id, meta, graph, chunks, vectors, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
                 ON CONFLICT (corpus_id) DO UPDATE SET
                     meta = EXCLUDED.meta,
                     graph = EXCLUDED.graph,
                     chunks = EXCLUDED.chunks,
+                    -- Keep stored vectors when the caller has none to give;
+                    -- a stale index is detected (chunk ids / model) on load.
+                    vectors = COALESCE(EXCLUDED.vectors, {self._TABLE}.vectors),
                     updated_at = now()
                 """,
-                (corpus_id, Jsonb(blobs.meta), Jsonb(blobs.graph), Jsonb(blobs.chunks)),
+                (
+                    corpus_id,
+                    Jsonb(blobs.meta),
+                    Jsonb(blobs.graph),
+                    Jsonb(blobs.chunks),
+                    Jsonb(blobs.vectors) if blobs.vectors is not None else None,
+                ),
             )
             conn.commit()
 
@@ -173,6 +219,27 @@ class PostgresBlobStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT 1 FROM {self._TABLE} WHERE corpus_id = %s", (corpus_id,))
             return cur.fetchone() is not None
+
+    def save_vectors(self, corpus_id: str, vectors: dict[str, Any]) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn, conn.cursor() as cur:
+            # Conditional on the stored chunk set still matching, so an
+            # instance that embedded an older version can't clobber newer
+            # vectors written by a concurrent ingest.
+            cur.execute(
+                f"""
+                UPDATE {self._TABLE} SET vectors = %s
+                WHERE corpus_id = %s
+                  AND COALESCE(
+                        (SELECT array_agg(c->>'chunk_id' ORDER BY (c->>'chunk_id') COLLATE "C")
+                           FROM jsonb_array_elements(chunks) AS c),
+                        ARRAY[]::text[]
+                      ) = %s::text[]
+                """,
+                (Jsonb(vectors), corpus_id, vector_chunk_ids(vectors)),
+            )
+            conn.commit()
 
 
 def make_blob_store(database_url: str) -> BlobStore | None:

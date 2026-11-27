@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -44,7 +45,9 @@ class FAISSStore:
         # when the SAME backend is asking for it.
         self.model_name = model_name
         self._lock = threading.Lock()
-        self._index = None  # lazy: faiss import deferred until first use
+        # Lazy: faiss is imported on first use. Typed Any because faiss is an
+        # optional dependency; with it installed, mypy otherwise infers None.
+        self._index: Any = None
         self.chunk_ids: list[str] = []
         # chunk_id -> latest row; superseded rows are skipped at search time.
         self._latest_row: dict[str, int] = {}

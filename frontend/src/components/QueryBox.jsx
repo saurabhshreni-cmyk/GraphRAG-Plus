@@ -2,18 +2,13 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import Spinner from "./Spinner.jsx";
 
-const SAMPLE_PROMPTS = [
-  "What does GraphRAG++ use to store entities and relations?",
-  "What is graph data structure?",
-  "What is adjacency matrix?",
-];
-
 export default function QueryBox({
   onAsk,
   busy,
   llmMode,
   onLlmModeChange,
   serverLlmEnabled,
+  suggestions = [],
 }) {
   const [question, setQuestion] = useState("");
 
@@ -78,11 +73,19 @@ export default function QueryBox({
         {/* Sample prompts + LLM toggle */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
-            {SAMPLE_PROMPTS.map((p) => (
+            {suggestions.length > 0 && (
+              <span className="self-center text-[10px] uppercase tracking-wider text-ink-500">
+                Try
+              </span>
+            )}
+            {suggestions.map((p) => (
               <button
                 type="button"
                 key={p}
-                onClick={() => setQuestion(p)}
+                onClick={() => {
+                  setQuestion(p);
+                  onAsk(p);
+                }}
                 disabled={busy}
                 className="rounded-full border border-white/5 bg-white/[0.02] px-3 py-1
                            text-xs text-ink-400 transition-all

@@ -7,6 +7,11 @@ const BASE = (import.meta.env.VITE_API_BASE || "http://127.0.0.1:8765").replace(
   "",
 );
 
+// True when the API runs on this machine. Only then can it read files by a
+// local path; the hosted API can only take uploads and URLs.
+const IS_LOCAL_API =
+  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(BASE);
+
 class ApiError extends Error {
   constructor(message, { status, body } = {}) {
     super(message);
@@ -111,7 +116,8 @@ export const api = {
     }
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail = (data && (data.detail || data.message)) || response.statusText;
+      const detail =
+        (data && (data.detail || data.message)) || response.statusText;
       throw new ApiError(`${response.status} ${detail}`, {
         status: response.status,
         body: data,
@@ -147,4 +153,4 @@ export const api = {
     request(`/corpora/${encodeURIComponent(corpusId)}`, { method: "DELETE" }),
 };
 
-export { BASE as API_BASE, ApiError };
+export { BASE as API_BASE, IS_LOCAL_API, ApiError };

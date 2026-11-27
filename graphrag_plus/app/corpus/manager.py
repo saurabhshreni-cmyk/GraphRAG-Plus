@@ -17,6 +17,8 @@ first access and cached. Creating a new corpus always allocates a fresh
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import shutil
@@ -38,6 +40,9 @@ from graphrag_plus.app.utils.logging_utils import get_logger
 from graphrag_plus.app.utils.run_logger import utc_now_iso
 
 logger = get_logger(__name__)
+
+# Largest FAISS index stored with a corpus (~1,500 chunks at 1024 dims).
+MAX_PERSISTED_VECTOR_BYTES = 8_000_000
 
 # corpus_id arrives from API path params and flows into filesystem paths
 # (including ``shutil.rmtree``), so it must match this strict allowlist:
@@ -197,7 +202,14 @@ class CorpusManager:
             return
         graph = load_json(self._graph_path(corpus_id), default=None) or dict(EMPTY_GRAPH)
         chunks = load_json(self._chunks_path(corpus_id), default=None) or list(EMPTY_CHUNKS)
-        self.blob_store.save(CorpusBlobs(meta=asdict(meta), graph=graph, chunks=chunks))
+        self.blob_store.save(
+            CorpusBlobs(
+                meta=asdict(meta),
+                graph=graph,
+                chunks=chunks,
+                vectors=self._read_vectors(corpus_id),
+            )
+        )
         logger.info("corpus.flushed id=%s", corpus_id)
 
     # ----------------------------------------------------------------- active
@@ -252,11 +264,62 @@ class CorpusManager:
         self._persist_meta(meta)
         dump_json(self._graph_path(corpus_id), blobs.graph or dict(EMPTY_GRAPH))
         dump_json(self._chunks_path(corpus_id), blobs.chunks or list(EMPTY_CHUNKS))
+        if blobs.vectors:
+            self._write_vectors(corpus_id, blobs.vectors)
         graph_store = GraphStore(self._graph_path(corpus_id))
+        # Reuses the restored FAISS index when its chunk ids and embedding
+        # model still match; otherwise embeds the chunks afresh.
         retrieval = RetrievalService(graph_store, self._chunks_path(corpus_id))
         bundle = CorpusBundle(meta=meta, graph_store=graph_store, retrieval=retrieval)
         self._bundles[corpus_id] = bundle
+        # If that meant a fresh embedding pass, store the result so the next
+        # instance doesn't pay for it again.
+        current = self._read_vectors(corpus_id)
+        if current is not None and current != blobs.vectors:
+            try:
+                self.blob_store.save_vectors(corpus_id, current)
+                logger.info("corpus.vectors_saved id=%s", corpus_id)
+            except Exception as exc:  # non-fatal: this instance still has them
+                logger.warning("corpus.vectors_save_failed id=%s error=%s", corpus_id, str(exc)[:200])
         return bundle
+
+    # --------------------------------------------------------- vector files
+    def _faiss_paths(self, corpus_id: str) -> tuple[Path, Path]:
+        index_path = self._corpus_dir(corpus_id) / "faiss.index"
+        return index_path, index_path.with_suffix(index_path.suffix + ".meta.json")
+
+    def _read_vectors(self, corpus_id: str) -> dict[str, object] | None:
+        """The corpus's saved FAISS index as a JSON-safe dict, or None.
+
+        None as well above ``MAX_PERSISTED_VECTOR_BYTES``: a very large index
+        would bloat every row read and the free database tier, so such a
+        corpus is simply re-embedded per instance as before.
+        """
+        index_path, meta_path = self._faiss_paths(corpus_id)
+        if not index_path.exists() or not meta_path.exists():
+            return None
+        size = index_path.stat().st_size
+        if size > MAX_PERSISTED_VECTOR_BYTES:
+            logger.info("corpus.vectors_not_persisted id=%s bytes=%d (over cap)", corpus_id, size)
+            return None
+        try:
+            return {
+                "meta": json.loads(meta_path.read_text(encoding="utf-8")),
+                "index_b64": base64.b64encode(index_path.read_bytes()).decode("ascii"),
+            }
+        except (OSError, ValueError) as exc:
+            logger.warning("corpus.vectors_read_failed id=%s error=%s", corpus_id, str(exc)[:200])
+            return None
+
+    def _write_vectors(self, corpus_id: str, vectors: dict[str, object]) -> None:
+        """Materialize a stored FAISS index so RetrievalService can reuse it."""
+        index_path, meta_path = self._faiss_paths(corpus_id)
+        try:
+            raw = base64.b64decode(str(vectors["index_b64"]), validate=True)
+            meta_path.write_text(json.dumps(vectors["meta"]), encoding="utf-8")
+            index_path.write_bytes(raw)
+        except (KeyError, OSError, binascii.Error, TypeError) as exc:
+            logger.warning("corpus.vectors_restore_failed id=%s error=%s", corpus_id, str(exc)[:200])
 
     def _load_existing_meta(self) -> None:
         if self.active_corpus_id is None:
