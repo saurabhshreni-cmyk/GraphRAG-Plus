@@ -130,6 +130,11 @@ class CorpusManager:
         local directory.
         """
         if corpus_id in self._bundles:
+            # In blob mode another instance may have deleted it since we
+            # cached it; drop the stale copy rather than keep serving it.
+            if self.blob_store is not None and not self.blob_store.exists(corpus_id):
+                self._bundles.pop(corpus_id, None)
+                raise KeyError(f"Unknown corpus_id: {corpus_id}")
             return self._bundles[corpus_id]
         if self.blob_store is not None:
             return self._hydrate_from_store(corpus_id)
@@ -164,6 +169,9 @@ class CorpusManager:
         """Permanently remove a corpus from the store + local scratch."""
         # Validate id shape even in blob mode (also guards the rmtree below).
         path = self._corpus_dir(corpus_id)
+        known = self.blob_store.exists(corpus_id) if self.blob_store is not None else path.exists()
+        if not known and corpus_id not in self._bundles:
+            raise KeyError(f"Unknown corpus_id: {corpus_id}")
         self._bundles.pop(corpus_id, None)
         if self.blob_store is not None:
             self.blob_store.delete(corpus_id)
@@ -195,11 +203,16 @@ class CorpusManager:
     # ----------------------------------------------------------------- active
     def get_active(self) -> CorpusBundle | None:
         """Return the active bundle, or ``None`` if no corpora exist."""
-        if self.active_corpus_id is None:
-            metas = self.list()
-            if not metas:
-                return None
-            self.active_corpus_id = metas[0].corpus_id
+        if self.active_corpus_id is not None:
+            try:
+                return self.get(self.active_corpus_id)
+            except KeyError:
+                # Deleted (possibly by another instance): fall back below.
+                self.active_corpus_id = None
+        metas = self.list()
+        if not metas:
+            return None
+        self.active_corpus_id = metas[0].corpus_id
         return self.get(self.active_corpus_id)
 
     def set_active(self, corpus_id: str) -> CorpusBundle:

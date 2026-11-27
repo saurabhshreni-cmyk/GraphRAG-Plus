@@ -12,10 +12,10 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from graphrag_plus.app.api.rate_limit import RateLimiter, client_key
+from graphrag_plus.app.api.rate_limit import DELETE_GROUP, RateLimiter, client_key
 from graphrag_plus.app.config.settings import get_settings
 from graphrag_plus.app.corpus.blob_store import make_blob_store
-from graphrag_plus.app.corpus.seed import seed_demo_corpus
+from graphrag_plus.app.corpus.seed import DEMO_CORPUS_ID, seed_demo_corpus
 from graphrag_plus.app.evaluation.runner import evaluate_stub
 from graphrag_plus.app.graph import local_graph
 from graphrag_plus.app.pipeline import GraphRAGPipeline
@@ -137,7 +137,10 @@ def ingest(request: IngestRequest) -> IngestResponse:
 @app.get("/corpora", response_model=list[CorpusInfo])
 def list_corpora() -> list[CorpusInfo]:
     """List all known corpora (newest first)."""
-    return [CorpusInfo(**asdict(meta)) for meta in pipeline.corpus_manager.list()]
+    return [
+        CorpusInfo(**asdict(meta), deletable=meta.corpus_id != DEMO_CORPUS_ID)
+        for meta in pipeline.corpus_manager.list()
+    ]
 
 
 @app.get("/corpora/active", response_model=CorpusInfo | None)
@@ -158,8 +161,24 @@ def select_corpus(corpus_id: str) -> CorpusInfo:
 
 
 @app.delete("/corpora/{corpus_id}")
-def delete_corpus(corpus_id: str) -> dict[str, str]:
-    """Permanently delete a corpus (its directory + cached state + Neo4j nodes)."""
+def delete_corpus(corpus_id: str, request: Request) -> dict[str, str]:
+    """Permanently delete a corpus (its directory + cached state + Neo4j nodes).
+
+    The bundled demo corpus is refused: on the public deploy any visitor can
+    call this, and the demo is what the site shows first.
+    """
+    if corpus_id == DEMO_CORPUS_ID:
+        raise HTTPException(status_code=403, detail="The demo corpus can't be deleted.")
+    if os.environ.get("GRAPHRAG_RATE_LIMIT", "1") != "0":
+        peer = request.client.host if request.client else "unknown"
+        retry_after = _rate_limiter.check(client_key(dict(request.headers), peer), DELETE_GROUP)
+        if retry_after is not None:
+            wait = max(1, int(retry_after + 0.999))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many deletes — this public demo is rate-limited. Try again in {wait}s.",
+                headers={"Retry-After": str(wait)},
+            )
     try:
         pipeline.corpus_manager.delete(corpus_id)
     except KeyError as exc:
