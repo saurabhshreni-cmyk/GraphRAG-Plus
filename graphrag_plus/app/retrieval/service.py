@@ -111,6 +111,21 @@ _W_GRAPH_HYBRID = 0.25
 _W_COSINE = 0.7
 _W_BM25 = 0.3
 
+
+def hybrid_blend_floor(min_cosine: float) -> float:
+    """Blend-score floor for FAISS mode, tied to the calibrated cosine floor.
+
+    A fixed ``_MIN_BLEND`` assumed bge-large, where off-topic cosines top out
+    near 0.40 (0.40 * 0.40 = 0.16, under the floor). Hosted models score
+    unrelated text higher: Gemini's off-topic best is ~0.50, so semantic alone
+    contributed 0.40 * 0.47 = 0.19 and slipped past the loose-pass blend floor
+    (0.17) even though its cosine was below the cosine floor. Requiring at
+    least what a chunk *at* the cosine floor contributes closes that gap; for
+    bge (floor 0.45 -> 0.18) the original 0.20 still applies.
+    """
+    return max(_MIN_BLEND, _W_SEMANTIC_HYBRID * min_cosine)
+
+
 logger = get_logger(__name__)
 
 
@@ -379,7 +394,8 @@ class RetrievalService:
         base_min_cosine = dense_min if semantic_is_faiss else _MIN_COSINE
         strong_cosine = dense_strong if semantic_is_faiss else _STRONG_COSINE
         loose_factor = _LOOSE_FACTOR_FAISS if semantic_is_faiss else _LOOSE_FACTOR_TFIDF
-        min_blend = _MIN_BLEND * (loose_factor if loose else 1.0)
+        base_min_blend = hybrid_blend_floor(base_min_cosine) if semantic_is_faiss else _MIN_BLEND
+        min_blend = base_min_blend * (loose_factor if loose else 1.0)
         min_cosine = base_min_cosine * (loose_factor if loose else 1.0)
 
         # Heterogeneous by design: each row carries float scores alongside the
