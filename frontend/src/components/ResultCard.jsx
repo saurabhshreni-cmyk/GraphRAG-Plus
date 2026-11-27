@@ -33,6 +33,22 @@ const SIGNAL_STYLES = {
 };
 
 // Which retrieval signals contributed, derived from per-evidence raw scores.
+// Display names for the reasoning models the backend can verify with. The
+// API reports the raw model id; DeepSeek R1 runs locally via Ollama and
+// gpt-oss-120b runs in the cloud via Groq.
+const VERIFIER_NAMES = [
+  [/deepseek-r1/i, "DeepSeek R1"],
+  [/gpt-oss-120b/i, "GPT-OSS 120B"],
+  [/gpt-oss-20b/i, "GPT-OSS 20B"],
+];
+
+function verifierName(result) {
+  const model = result?.reasoning_model || "";
+  if (!model) return "the reasoning model";
+  const match = VERIFIER_NAMES.find(([pattern]) => pattern.test(model));
+  return match ? match[1] : model.split("/").pop();
+}
+
 function firedSignals(result) {
   const evidence = result?.evidence || [];
   const fired = [];
@@ -139,7 +155,7 @@ export default function ResultCard({ result, busy, onEvidenceHover }) {
               error={result.calibration_error}
             />
 
-            {/* Signal pills + DeepSeek R1 verification badges */}
+            {/* Signal pills + reasoning-verification badges */}
             <div className="flex flex-wrap items-center gap-1.5">
               {firedSignals(result).map((signal) => (
                 <span
@@ -153,21 +169,21 @@ export default function ResultCard({ result, busy, onEvidenceHover }) {
               {result.verified_by_reasoning && (
                 <span
                   className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${TONE_CLASSES.gold}`}
-                  title="DeepSeek R1 re-read the evidence and confirmed this answer"
+                  title={`${verifierName(result)} re-read the evidence and confirmed this answer`}
                 >
                   <ShieldIcon />
-                  Verified by DeepSeek R1
+                  Verified by {verifierName(result)}
                 </span>
               )}
             </div>
             {result.answer_changed_by_reasoning && (
               <p className="text-[11px] italic text-yellow-300/90 [html:not(.dark)_&]:text-yellow-700">
-                Answer refined by reasoning — DeepSeek R1 corrected the draft
-                against the evidence.
+                Answer refined by reasoning — {verifierName(result)} corrected the
+                draft against the evidence.
               </p>
             )}
             {result.verified_by_reasoning && result.reasoning_summary && (
-              <Collapsible title="What DeepSeek R1 checked">
+              <Collapsible title={`What ${verifierName(result)} checked`}>
                 <p className="text-[11px] leading-relaxed text-ink-300 [html:not(.dark)_&]:text-ink-600">
                   {result.reasoning_summary}
                 </p>

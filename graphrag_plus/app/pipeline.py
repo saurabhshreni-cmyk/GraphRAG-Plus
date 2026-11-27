@@ -697,6 +697,11 @@ class GraphRAGPipeline:
             verified_by_reasoning=bool(verification and getattr(verification, "verified", False)),
             reasoning_summary=str(getattr(verification, "reasoning_summary", "") or ""),
             answer_changed_by_reasoning=bool(verification and getattr(verification, "changed", False)),
+            reasoning_model=(
+                str(getattr(verification, "model", "") or "")
+                if verification and getattr(verification, "verified", False)
+                else ""
+            ),
         )
 
         output_payload = {

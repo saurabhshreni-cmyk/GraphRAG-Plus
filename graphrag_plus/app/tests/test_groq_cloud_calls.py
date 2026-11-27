@@ -231,3 +231,12 @@ class TestKeyHygiene:
         text = "\n".join(r.getMessage() for r in caplog.records)
         assert _FAKE_KEY not in text
         assert "[REDACTED]" in text
+
+
+def test_verification_reports_which_model_ran(monkeypatch):
+    # The dashboard labels the badge from this; it used to hard-code
+    # "DeepSeek R1" even when gpt-oss-120b on Groq did the verifying.
+    _recorder(monkeypatch, reasoning_verifier, _chat_reply("FINAL ANSWER: draft"))
+    result = GroqReasoningVerifier(api_key="k").verify("q?", "draft", [{"full_text": "evidence"}])
+    assert result.verified is True
+    assert result.model == "openai/gpt-oss-120b"
